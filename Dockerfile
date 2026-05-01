@@ -8,7 +8,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
-    libalsa-dev \
+    libasound2-dev \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
