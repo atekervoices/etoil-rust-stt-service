@@ -16,7 +16,7 @@ name = "api_server"
 path = "src/api_server.rs"
 
 [dependencies]
-canary-rs = { git = "https://github.com/mmende/canary-rs.git", features = ["cuda"] }
+canary-rs = { version = "0.1", features = ["cuda"] }
 cpal = "0.17.3"
 tokio = { version = "1.0", features = ["full"] }
 warp = "0.3"
