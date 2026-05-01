@@ -2,6 +2,7 @@
 name = "etoil-rust-stt-service"
 version = "0.1.0"
 edition = "2021"
+resolver = "2"
 
 [[bin]]
 name = "file_transcribe"
