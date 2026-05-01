@@ -157,22 +157,31 @@ impl WebSocketHandler {
                                                                 let delta_text = result.delta_text.clone();
                                                                 
                                                                 // Update shared state and check for speech start
-                                                                {
+                                                                let should_send_start = {
                                                                     let mut state = shared_state.lock().unwrap();
                                                                     let (ref mut accumulated_text, ref mut speech_active, ref mut last_audio_time) = *state;
                                                                     *last_audio_time = start_time;
                                                                     
                                                                     if !*speech_active && !delta_text.trim().is_empty() {
                                                                         *speech_active = true;
-                                                                        let start_msg = WSMessage::SpeechStarted {
-                                                                            timestamp: processing_time,
-                                                                        };
-                                                                        let _ = tx.send(start_msg).await;
+                                                                        true
+                                                                    } else {
+                                                                        false
                                                                     }
-                                                                    
-                                                                    if !delta_text.trim().is_empty() {
-                                                                        *accumulated_text += &delta_text;
-                                                                    }
+                                                                };
+                                                                
+                                                                if should_send_start {
+                                                                    let start_msg = WSMessage::SpeechStarted {
+                                                                        timestamp: processing_time,
+                                                                    };
+                                                                    let _ = tx.send(start_msg).await;
+                                                                }
+                                                                
+                                                                // Update accumulated text
+                                                                if !delta_text.trim().is_empty() {
+                                                                    let mut state = shared_state.lock().unwrap();
+                                                                    let (ref mut accumulated_text, _, _) = *state;
+                                                                    *accumulated_text += &delta_text;
                                                                 }
                                                                 
                                                                 // Send partial
