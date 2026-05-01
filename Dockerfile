@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for Canary STT Service
 # Stage 1: Build
-FROM rust:1.77-slim-bookworm AS builder
+FROM rust:1.82-slim-bookworm AS builder
 
 WORKDIR /app
 
