@@ -49,29 +49,44 @@ cargo run --bin api_server
 
 ### Model Download
 
-The service uses the `canary-180m-flash-int8` model. The model directory is excluded from git due to its large size.
+The service uses the NVIDIA Canary 180M Flash ONNX model (int8 quantized). The model directory is excluded from git due to its large size.
 
-**Download the model:**
+**Download the model using onnx-asr:**
 ```bash
-# Clone the model repository or download from Hugging Face
-# Example (adjust based on actual model source):
-git clone https://huggingface.co/nvidia/canary-180m-flash-int8 canary-180m-flash-int8
+# Install onnx-asr
+pip install onnx-asr[cpu,hub]
 
-# Or download manually and extract
-# Ensure the directory structure is:
-# ./canary-180m-flash-int8/
-#   ├── model.onnx
-#   ├── config.json
-#   └── other model files...
+# Download the model (this will download to current directory)
+python -c "import onnx_asr; model = onnx_asr.load_model('istupakov/canary-180m-flash-onnx')"
+
+# The model will be downloaded to ~/.cache/onnx_asr/
+# Copy it to your project directory
+cp -r ~/.cache/onnx_asr/istupakov_canary-180m-flash-onnx ./canary-180m-flash-int8
+```
+
+**Alternative: Download directly from Hugging Face:**
+```bash
+# Install huggingface-cli
+pip install huggingface_hub
+
+# Download the model files
+huggingface-cli download istupakov/canary-180m-flash-onnx --local-dir ./canary-180m-flash-int8
 ```
 
 **Verify model installation:**
 ```bash
 # The model should be in the canary-180m-flash-int8 directory
 ls canary-180m-flash-int8
+# Expected files: model.onnx, config.json, tokenizer.json, etc.
 ```
 
-**Note:** The model directory is excluded from git via `.gitignore` to keep the repository size manageable.
+**Note:** The model directory is excluded from git via `.gitignore` to keep the repository size manageable. Users must download the model separately after cloning the repository.
+
+**Model Details:**
+- **Source:** NVIDIA Canary 180M Flash converted to ONNX format
+- **Size:** ~180M parameters (int8 quantized)
+- **Languages:** English, German, Spanish, French
+- **License:** CC-BY-4.0
 
 ## Quick Start
 
