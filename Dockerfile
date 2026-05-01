@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for Canary STT Service
 # Stage 1: Build
-FROM rust:nightly-slim as builder
+FROM rust:nightly as builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
