@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
     libasound2-dev \
+    g++ \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

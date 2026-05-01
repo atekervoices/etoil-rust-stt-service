@@ -35,7 +35,6 @@ test*.wav
 
 # Documentation
 docs.html
-swagger.html
 
 # OS
 .DS_Store
