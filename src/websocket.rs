@@ -149,7 +149,6 @@ impl WebSocketHandler {
                                                 
                                                 if let Some(ref mut state) = stream_state {
                                                     let start_time = std::time::Instant::now();
-                                                    last_audio_time = start_time; // Update last audio time
                                                     
                                                     match state.push_samples(&chunk, audio_sr as usize, 1) {
                                                         Ok(results) => {
