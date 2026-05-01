@@ -1,6 +1,8 @@
 # Multi-stage Dockerfile for Canary STT Service
 # Stage 1: Build
-FROM rust:1.82-slim as builder
+FROM rust:1.77-slim-bookworm AS builder
+
+WORKDIR /app
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -9,20 +11,8 @@ RUN apt-get update && apt-get install -y \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
-
-# Copy Cargo files (Cargo.lock is optional)
-COPY Cargo.toml ./
-COPY Cargo.lock* ./
-
-# Create a dummy main.rs to cache dependencies
-RUN mkdir src && \
-    echo "fn main() {}" > src/main.rs && \
-    cargo build --release && \
-    rm -rf src
-
-# Copy actual source code
-COPY src ./src
+# Copy source code
+COPY . .
 
 # Build the application
 RUN cargo build --release
@@ -34,6 +24,7 @@ FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
