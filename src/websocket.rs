@@ -84,11 +84,11 @@ impl WebSocketHandler {
         let mut source_lang = "en".to_string();
         let mut target_lang = "en".to_string();
         let mut stream_state = None;
-        let silence_threshold = std::time::Duration::from_secs(1); // 1 second silence
-
+        let silence_threshold = std::time::Duration::from_secs(2); // 2 second silence
+        
         // Create shared state for turn detection
         use std::sync::Arc;
-        use std::sync::Mutex;
+        use tokio::sync::Mutex;
         let shared_state = Arc::new(Mutex::new((
             String::new(), // accumulated_text
             false,        // speech_active  
@@ -157,17 +157,15 @@ impl WebSocketHandler {
                                                                 let delta_text = result.delta_text.clone();
                                                                 
                                                                 // Update shared state and check for speech start
-                                                                let should_send_start = {
-                                                                    let mut state = shared_state.lock().unwrap();
-                                                                    let (ref mut accumulated_text, ref mut speech_active, ref mut last_audio_time) = *state;
-                                                                    *last_audio_time = start_time;
-                                                                    
-                                                                    if !*speech_active && !delta_text.trim().is_empty() {
-                                                                        *speech_active = true;
-                                                                        true
-                                                                    } else {
-                                                                        false
-                                                                    }
+                                                                let mut state = shared_state.lock().await;
+                                                                let (ref mut accumulated_text, ref mut speech_active, ref mut last_audio_time) = *state;
+                                                                *last_audio_time = start_time;
+                                                                
+                                                                let should_send_start = if !*speech_active && !delta_text.trim().is_empty() {
+                                                                    *speech_active = true;
+                                                                    true
+                                                                } else {
+                                                                    false
                                                                 };
                                                                 
                                                                 if should_send_start {
@@ -179,10 +177,9 @@ impl WebSocketHandler {
                                                                 
                                                                 // Update accumulated text
                                                                 if !delta_text.trim().is_empty() {
-                                                                    let mut state = shared_state.lock().unwrap();
-                                                                    let (ref mut accumulated_text, _, _) = *state;
                                                                     *accumulated_text += &delta_text;
                                                                 }
+                                                                drop(state); // Release lock
                                                                 
                                                                 // Send partial
                                                                 if !delta_text.trim().is_empty() {
@@ -240,7 +237,7 @@ impl WebSocketHandler {
                 
                 // Check if we need to send final transcript
                 let (accumulated_text_clone, should_send) = {
-                    let mut state = state_clone.lock().unwrap();
+                    let mut state = state_clone.lock().await;
                     let (ref mut accumulated_text, ref mut speech_active, ref mut last_audio_time) = *state;
                     
                     if *speech_active && (now - *last_audio_time) > silence_threshold {
