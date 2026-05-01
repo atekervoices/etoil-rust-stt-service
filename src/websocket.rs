@@ -84,7 +84,7 @@ impl WebSocketHandler {
         let mut source_lang = "en".to_string();
         let mut target_lang = "en".to_string();
         let mut stream_state = None;
-        let silence_threshold = std::time::Duration::from_secs(2); // 2 second silence
+        let silence_threshold = std::time::Duration::from_secs(1); // 1 second silence
         
         // Create shared state for turn detection
         use std::sync::Arc;
@@ -129,6 +129,7 @@ impl WebSocketHandler {
                                         // Decode base64 audio data
                                         if let Ok(audio_bytes) = base64::engine::general_purpose::STANDARD.decode(&data) {
                                             // Audio received successfully, processing...
+                                            println!("Server: Received audio chunk: {} bytes, sample_rate: {}", audio_bytes.len(), audio_sr);
                                             
                                             // Convert bytes to f32 samples (assuming 16-bit PCM)
                                             let mut samples = Vec::new();
