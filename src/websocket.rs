@@ -228,29 +228,41 @@ impl WebSocketHandler {
                 interval.tick().await;
                 
                 let now = std::time::Instant::now();
-                let mut state = state_clone.lock().unwrap();
-                let (ref mut accumulated_text, ref mut speech_active, ref mut last_audio_time) = *state;
                 
-                if *speech_active && (now - *last_audio_time) > silence_threshold {
-                    // Speech ended, send final transcript
-                    if !accumulated_text.trim().is_empty() {
-                        let final_msg = WSMessage::Final {
-                            text: accumulated_text.clone(),
-                            confidence: 0.8,
-                            timestamp: now.elapsed().as_secs_f64(),
-                            processing_time: 0.0,
-                        };
-                        let _ = tx_clone.send(final_msg).await;
-                        
-                        let end_msg = WSMessage::SpeechEnded {
-                            timestamp: now.elapsed().as_secs_f64(),
-                        };
-                        let _ = tx_clone.send(end_msg).await;
-                    }
+                // Check if we need to send final transcript
+                let (accumulated_text_clone, should_send) = {
+                    let mut state = state_clone.lock().unwrap();
+                    let (ref mut accumulated_text, ref mut speech_active, ref mut last_audio_time) = *state;
                     
-                    // Reset state
-                    accumulated_text.clear();
-                    *speech_active = false;
+                    if *speech_active && (now - *last_audio_time) > silence_threshold {
+                        let text_clone = accumulated_text.clone();
+                        // Reset state
+                        accumulated_text.clear();
+                        *speech_active = false;
+                        (text_clone, true)
+                    } else {
+                        (String::new(), false)
+                    }
+                };
+                
+                if should_send && !accumulated_text_clone.trim().is_empty() {
+                    let final_msg = WSMessage::Final {
+                        text: accumulated_text_clone.clone(),
+                        confidence: 0.8,
+                        timestamp: now.elapsed().as_secs_f64(),
+                        processing_time: 0.0,
+                    };
+                    let _ = tx_clone.send(final_msg).await;
+                    
+                    let end_msg = WSMessage::SpeechEnded {
+                        timestamp: now.elapsed().as_secs_f64(),
+                    };
+                    let _ = tx_clone.send(end_msg).await;
+                }
+                
+                // If we sent final, continue to next iteration
+                if should_send {
+                    continue;
                 }
             }
         });
