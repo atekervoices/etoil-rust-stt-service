@@ -1,0 +1,33 @@
+[package]
+name = "etoil-rust-stt-service"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "file_transcribe"
+path = "src/main.rs"
+
+[[bin]]
+name = "live"
+path = "src/live.rs"
+
+[[bin]]
+name = "api_server"
+path = "src/api_server.rs"
+
+[dependencies]
+canary-rs = { git = "https://github.com/mmende/canary-rs.git", features = ["cuda"] }
+cpal = "0.17.3"
+tokio = { version = "1.0", features = ["full"] }
+warp = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+bytes = "1.0"
+futures-util = "0.3"
+futures = "0.3"
+tokio-tungstenite = "0.20"
+base64 = "0.21"
+mime = "0.3"
+multer = "3.0"
+clap = { version = "4.0", features = ["derive"] }
+utoipa = { version = "4.2", features = ["yaml"] }

@@ -1,0 +1,45 @@
+use canary_rs::{Canary, ExecutionConfig, ExecutionProvider};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    println!("Loading Canary model...");
+
+    // Auto-detect best execution provider: CUDA GPU if available, otherwise CPU
+    let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
+    let model = match Canary::from_pretrained("canary-180m-flash-int8", Some(config)) {
+        Ok(model) => {
+            println!("✅ Using CUDA GPU acceleration");
+            model
+        }
+        Err(_) => {
+            println!("⚠️  CUDA not available, falling back to CPU");
+            let cpu_config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cpu);
+            Canary::from_pretrained("canary-180m-flash-int8", Some(cpu_config))?
+        }
+    };
+    let mut session = model.session();
+
+    println!("Model loaded successfully!");
+
+    // Transcribe the test audio file
+    // The audio is in English, transcribe to English
+    println!("Transcribing test-audio.wav (English)...");
+    let result = session.transcribe_file("test-audio.wav", "en", "en")?;
+
+    println!("\n=== Transcription Result ===");
+    println!("Text: {}", result.text);
+
+    println!("\n=== Token-level Timestamps ===");
+    for token in result.tokens.iter().take(20) {
+        // Show first 20 tokens
+        println!(
+            "[{:.3}s - {:.3}s] {} (prob: {:.3})",
+            token.start, token.end, token.text, token.prob
+        );
+    }
+
+    if result.tokens.len() > 20 {
+        println!("... and {} more tokens", result.tokens.len() - 20);
+    }
+
+    Ok(())
+}

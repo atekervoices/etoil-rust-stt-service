@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  canary-stt:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: canary-stt-service
+    ports:
+      - "8080:8080"
+    volumes:
+      # Mount model directory (if you want to use external model)
+      - ./canary-180m-flash-int8:/app/canary-180m-flash-int8:ro
+      # Mount audio files for testing
+      - ./audio:/app/audio:ro
+    environment:
+      - RUST_LOG=info
+      - MODEL_PATH=/app/canary-180m-flash-int8
+    # GPU support (requires nvidia-docker2)
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  # Alternative CPU-only version (comment out the above and use this if no GPU)
+  # canary-stt-cpu:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.cpu
+  #   container_name: canary-stt-service-cpu
+  #   ports:
+  #     - "8080:8080"
+  #   volumes:
+  #     - ./canary-180m-flash-int8:/app/canary-180m-flash-int8:ro
+  #     - ./audio:/app/audio:ro
+  #   environment:
+  #     - RUST_LOG=info
+  #     - MODEL_PATH=/app/canary-180m-flash-int8
+  #   restart: unless-stopped
