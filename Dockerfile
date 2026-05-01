@@ -1,17 +1,24 @@
 # Multi-stage Dockerfile for Canary STT Service
 # Stage 1: Build
-FROM rust:1.88-slim-bookworm AS builder
+FROM ubuntu:24.04 AS builder
 
-WORKDIR /app
+# Avoid interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
 
-# Install build dependencies
+# Install build dependencies and Rust
 RUN apt-get update && apt-get install -y \
+    curl \
     pkg-config \
     libssl-dev \
     libasound2-dev \
     g++ \
     ca-certificates \
+    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
     && rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+WORKDIR /app
 
 # Copy source code
 COPY . .
@@ -20,12 +27,12 @@ COPY . .
 RUN cargo build --release
 
 # Stage 2: Runtime (with GPU support)
-FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
+FROM nvidia/cuda:12.6.3-runtime-ubuntu24.04
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
     ca-certificates \
-    libssl3 \
+    libssl3t64 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
