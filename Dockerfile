@@ -40,7 +40,6 @@ WORKDIR /app
 
 # Copy the binary from builder stage
 COPY --from=builder /app/target/release/api_server /app/api_server
-COPY --from=builder /app/target/release/main /app/main
 
 # Copy model directory (if it exists in the build context)
 COPY canary-180m-flash-int8 ./canary-180m-flash-int8
