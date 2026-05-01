@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 mod server;
 mod websocket;
+mod vad_implementation;
 use server::{CanaryService, run_server};
 
 #[tokio::main]

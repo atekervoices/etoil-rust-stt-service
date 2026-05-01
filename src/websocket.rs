@@ -4,8 +4,9 @@ use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::Arc;
-use tokio::sync::{RwLock, mpsc};
+use tokio::sync::{RwLock, mpsc, Mutex};
 use warp::ws::{WebSocket, Message as WarpMessage};
+use crate::vad_implementation::{VADState, VADResult, rms, normalize_punctuation_spacing};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -84,16 +85,12 @@ impl WebSocketHandler {
         let mut source_lang = "en".to_string();
         let mut target_lang = "en".to_string();
         let mut stream_state = None;
-        let silence_threshold = std::time::Duration::from_secs(1); // 1 second silence
+        let mut full_session = None;
+        let mut sample_rate = 16000_usize;
+        let mut channels = 1_usize;
         
-        // Create shared state for turn detection
-        use std::sync::Arc;
-        use tokio::sync::Mutex;
-        let shared_state = Arc::new(Mutex::new((
-            String::new(), // accumulated_text
-            false,        // speech_active  
-            std::time::Instant::now(), // last_audio_time
-        )));
+        // Create VAD state for proper turn detection
+        let vad_state = Arc::new(Mutex::new(VADState::new()));
 
         while let Some(msg) = ws_rx.next().await {
             match msg {
@@ -103,6 +100,7 @@ impl WebSocketHandler {
                             if let Ok(ws_msg) = serde_json::from_str::<WSMessage>(&text) {
                                 match ws_msg {
                                     WSMessage::Config { sample_rate: _sr, source_lang: sl, target_lang: tl } => {
+                                        println!("Server: Received config message - sample_rate: {:?}, source_lang: {:?}, target_lang: {:?}", _sr, sl, tl);
                                         if let Some(sl) = sl { source_lang = sl; }
                                         if let Some(tl) = tl { target_lang = tl; }
                                         
@@ -115,15 +113,23 @@ impl WebSocketHandler {
                                             .with_pad_partial(false)
                                             .with_stability_window(3);
                                         
+                                        // Initialize streaming state for partial results
                                         match model.stream(source_lang.clone(), target_lang.clone(), stream_cfg) {
-                                            Ok(state) => stream_state = Some(state),
+                                            Ok(state) => {
+                                                stream_state = Some(state);
+                                                println!("Server: Stream initialized successfully");
+                                            },
                                             Err(e) => {
+                                                println!("Server: Failed to initialize stream: {}", e);
                                                 let _ = tx.send(WSMessage::Error {
                                                     message: format!("Failed to initialize stream: {}", e),
                                                 }).await;
                                                 continue;
                                             }
                                         }
+                                        
+                                        // Initialize full session for final re-decode (like Deepgram/ElevenLabs)
+                                        full_session = Some(model.session());
                                     }
                                     WSMessage::Audio { data, sample_rate: audio_sr } => {
                                         // Decode base64 audio data
@@ -148,48 +154,84 @@ impl WebSocketHandler {
                                             if stream_state.is_some() && audio_buffer.len() >= min_samples {
                                                 let chunk: Vec<f32> = audio_buffer.drain(..min_samples).collect();
                                                 
+                                                // Update sample_rate and channels for final decode
+                                                sample_rate = audio_sr as usize;
+                                                
+                                                // Process audio through VAD
+                                                let mut vad = vad_state.lock().await;
+                                                let vad_result = vad.process_chunk(&chunk, sample_rate);
+                                                
+                                                match vad_result {
+                                                    VADResult::SpeechStarted => {
+                                                        println!("Server: Speech started detected");
+                                                        let _ = tx.send(WSMessage::SpeechStarted {
+                                                            timestamp: std::time::Instant::now().elapsed().as_secs_f64(),
+                                                        }).await;
+                                                    }
+                                                    VADResult::EndOfUtterance { audio, should_finalize } => {
+                                                        println!("Server: End of utterance detected, should_finalize: {}", should_finalize);
+                                                        
+                                                        if should_finalize {
+                                                            // Send speech_ended
+                                                            let _ = tx.send(WSMessage::SpeechEnded {
+                                                                timestamp: std::time::Instant::now().elapsed().as_secs_f64(),
+                                                            }).await;
+                                                            
+                                                            // Re-decode full utterance for accurate final transcript (like Deepgram/ElevenLabs)
+                                                            if let Some(ref mut session) = full_session {
+                                                                let start_time = std::time::Instant::now();
+                                                                match session.transcribe_samples(&audio, sample_rate, 1, &source_lang, &target_lang) {
+                                                                    Ok(result) => {
+                                                                        let processing_time = start_time.elapsed().as_secs_f64();
+                                                                        let final_text = normalize_punctuation_spacing(result.text.trim());
+                                                                        
+                                                                        if !final_text.is_empty() {
+                                                                            println!("Server: Final transcript: {}", final_text);
+                                                                            let _ = tx.send(WSMessage::Final {
+                                                                                text: final_text,
+                                                                                confidence: 0.95, // Higher confidence for full re-decode
+                                                                                timestamp: processing_time,
+                                                                                processing_time,
+                                                                            }).await;
+                                                                        }
+                                                                    }
+                                                                    Err(e) => {
+                                                                        println!("Server: Error in final decode: {}", e);
+                                                                    }
+                                                                }
+                                                            }
+                                                            
+                                                            // Reset streaming state for next utterance
+                                                            if let Some(ref mut state) = stream_state {
+                                                                state.reset();
+                                                            }
+                                                            vad.accumulated_text.clear();
+                                                        }
+                                                    }
+                                                    _ => {} // Silence or SpeechContinues - no special action needed
+                                                }
+                                                
+                                                // Process through streaming for partial results
                                                 if let Some(ref mut state) = stream_state {
                                                     let start_time = std::time::Instant::now();
                                                     
-                                                    match state.push_samples(&chunk, audio_sr as usize, 1) {
+                                                    match state.push_samples(&chunk, sample_rate, 1) {
                                                         Ok(results) => {
                                                             let processing_time = start_time.elapsed().as_secs_f64();
                                                             for result in results {
                                                                 let delta_text = result.delta_text.clone();
                                                                 
-                                                                // Update shared state and check for speech start
-                                                                let mut state = shared_state.lock().await;
-                                                                let (ref mut accumulated_text, ref mut speech_active, ref mut last_audio_time) = *state;
-                                                                *last_audio_time = start_time;
-                                                                
-                                                                let should_send_start = if !*speech_active && !delta_text.trim().is_empty() {
-                                                                    *speech_active = true;
-                                                                    true
-                                                                } else {
-                                                                    false
-                                                                };
-                                                                
-                                                                if should_send_start {
-                                                                    let start_msg = WSMessage::SpeechStarted {
-                                                                        timestamp: processing_time,
-                                                                    };
-                                                                    let _ = tx.send(start_msg).await;
-                                                                }
-                                                                
-                                                                // Update accumulated text
                                                                 if !delta_text.trim().is_empty() {
-                                                                    *accumulated_text += &delta_text;
-                                                                }
-                                                                drop(state); // Release lock
-                                                                
-                                                                // Send partial
-                                                                if !delta_text.trim().is_empty() {
-                                                                    let msg = WSMessage::Partial {
-                                                                        text: delta_text,
-                                                                        confidence: 0.8, // Placeholder confidence
-                                                                        timestamp: processing_time,
-                                                                    };
-                                                                    let _ = tx.send(msg).await;
+                                                                    // Update accumulated text with normalization
+                                                                    let normalized = normalize_punctuation_spacing(&delta_text);
+                                                                    if !normalized.is_empty() {
+                                                                        // Send partial
+                                                                        let _ = tx.send(WSMessage::Partial {
+                                                                            text: normalized,
+                                                                            confidence: 0.8,
+                                                                            timestamp: processing_time,
+                                                                        }).await;
+                                                                    }
                                                                 }
                                                             }
                                                         }
@@ -224,54 +266,5 @@ impl WebSocketHandler {
                 }
             }
         }
-        
-        // Add silence detection task using shared state
-        let tx_clone = tx.clone();
-        let state_clone = shared_state.clone();
-        
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
-            loop {
-                interval.tick().await;
-                
-                let now = std::time::Instant::now();
-                
-                // Check if we need to send final transcript
-                let (accumulated_text_clone, should_send) = {
-                    let mut state = state_clone.lock().await;
-                    let (ref mut accumulated_text, ref mut speech_active, ref mut last_audio_time) = *state;
-                    
-                    if *speech_active && (now - *last_audio_time) > silence_threshold {
-                        let text_clone = accumulated_text.clone();
-                        // Reset state
-                        accumulated_text.clear();
-                        *speech_active = false;
-                        (text_clone, true)
-                    } else {
-                        (String::new(), false)
-                    }
-                };
-                
-                if should_send && !accumulated_text_clone.trim().is_empty() {
-                    let final_msg = WSMessage::Final {
-                        text: accumulated_text_clone.clone(),
-                        confidence: 0.8,
-                        timestamp: now.elapsed().as_secs_f64(),
-                        processing_time: 0.0,
-                    };
-                    let _ = tx_clone.send(final_msg).await;
-                    
-                    let end_msg = WSMessage::SpeechEnded {
-                        timestamp: now.elapsed().as_secs_f64(),
-                    };
-                    let _ = tx_clone.send(end_msg).await;
-                }
-                
-                // If we sent final, continue to next iteration
-                if should_send {
-                    continue;
-                }
-            }
-        });
     }
 }
