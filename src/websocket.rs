@@ -107,11 +107,11 @@ impl WebSocketHandler {
                                         // Initialize stream state
                                         let model = self.model.read().await;
                                         let stream_cfg = StreamConfig::new()
-                                            .with_window_duration(8.0)
-                                            .with_step_duration(0.5)
+                                            .with_window_duration(0.5)  // Minimum viable window for fast TTFB (was 8.0)
+                                            .with_step_duration(0.1)    // Very frequent updates (was 0.5)
                                             .with_emit_partial(true)
-                                            .with_pad_partial(false)
-                                            .with_stability_window(3);
+                                            .with_pad_partial(true)     // Enable padding for faster first result
+                                            .with_stability_window(1);   // Minimum stability for speed
                                         
                                         // Initialize streaming state for partial results
                                         match model.stream(source_lang.clone(), target_lang.clone(), stream_cfg) {
@@ -149,7 +149,7 @@ impl WebSocketHandler {
                                             audio_buffer.extend(samples);
                                             
                                             // Process if we have enough audio and stream is initialized
-                                            let min_samples = audio_sr as usize / 4; // 0.25 second minimum
+                                            let min_samples = audio_sr as usize / 10; // 0.1 second minimum for fast TTFB
                                             
                                             if stream_state.is_some() && audio_buffer.len() >= min_samples {
                                                 let chunk: Vec<f32> = audio_buffer.drain(..min_samples).collect();

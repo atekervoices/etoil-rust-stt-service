@@ -42,7 +42,7 @@ impl VADState {
         let silence_threshold = (self.noise_floor * 3.0)
             .clamp(min_silence_threshold, max_silence_threshold);
         
-        let silence_hold_seconds = 0.8_f32;
+        let silence_hold_seconds = 0.5_f32;  // Reduced from 0.8 for faster final detection
         let silence_hold_samples = ((sample_rate as f32 * silence_hold_seconds).round() as usize).max(1);
         
         let min_utterance_seconds = 0.3_f32;
