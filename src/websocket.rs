@@ -34,6 +34,14 @@ pub enum WSMessage {
         timestamp: f64,
         processing_time: f64,
     },
+    #[serde(rename = "speech_started")]
+    SpeechStarted {
+        timestamp: f64,
+    },
+    #[serde(rename = "speech_ended")]
+    SpeechEnded {
+        timestamp: f64,
+    },
     #[serde(rename = "error")]
     Error {
         message: String,
@@ -76,6 +84,10 @@ impl WebSocketHandler {
         let mut source_lang = "en".to_string();
         let mut target_lang = "en".to_string();
         let mut stream_state = None;
+        let mut accumulated_text = String::new();
+        let mut speech_active = false;
+        let mut last_audio_time = std::time::Instant::now();
+        let mut silence_threshold = std::time::Duration::from_secs(1); // 1 second silence
 
         while let Some(msg) = ws_rx.next().await {
             match msg {
@@ -131,17 +143,34 @@ impl WebSocketHandler {
                                                 
                                                 if let Some(ref mut state) = stream_state {
                                                     let start_time = std::time::Instant::now();
+                                                    last_audio_time = start_time; // Update last audio time
+                                                    
                                                     match state.push_samples(&chunk, audio_sr as usize, 1) {
                                                         Ok(results) => {
                                                             let processing_time = start_time.elapsed().as_secs_f64();
                                                             for result in results {
-                                                                // Send partial results with both full text and delta
-                                                                let msg = WSMessage::Partial {
-                                                                    text: result.delta_text.clone(),
-                                                                    confidence: 0.8, // Placeholder confidence
-                                                                    timestamp: processing_time,
-                                                                };
-                                                                let _ = tx.send(msg).await;
+                                                                let delta_text = result.delta_text.clone();
+                                                                
+                                                                // Check if this is the start of speech
+                                                                if !speech_active && !delta_text.trim().is_empty() {
+                                                                    speech_active = true;
+                                                                    let start_msg = WSMessage::SpeechStarted {
+                                                                        timestamp: processing_time,
+                                                                    };
+                                                                    let _ = tx.send(start_msg).await;
+                                                                }
+                                                                
+                                                                // Accumulate text and send partial
+                                                                if !delta_text.trim().is_empty() {
+                                                                    accumulated_text += &delta_text;
+                                                                    
+                                                                    let msg = WSMessage::Partial {
+                                                                        text: delta_text,
+                                                                        confidence: 0.8, // Placeholder confidence
+                                                                        timestamp: processing_time,
+                                                                    };
+                                                                    let _ = tx.send(msg).await;
+                                                                }
                                                             }
                                                         }
                                                         Err(e) => {
@@ -175,5 +204,42 @@ impl WebSocketHandler {
                 }
             }
         }
+        
+        // Add silence detection task
+        let tx_clone = tx.clone();
+        let mut accumulated_text_clone = accumulated_text.clone();
+        let mut speech_active_clone = speech_active;
+        let mut last_audio_time_clone = last_audio_time;
+        let silence_threshold_clone = silence_threshold;
+        
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(100));
+            loop {
+                interval.tick().await;
+                
+                let now = std::time::Instant::now();
+                if speech_active_clone && (now - last_audio_time_clone) > silence_threshold_clone {
+                    // Speech ended, send final transcript
+                    if !accumulated_text_clone.trim().is_empty() {
+                        let final_msg = WSMessage::Final {
+                            text: accumulated_text_clone.clone(),
+                            confidence: 0.8,
+                            timestamp: now.elapsed().as_secs_f64(),
+                            processing_time: 0.0,
+                        };
+                        let _ = tx_clone.send(final_msg).await;
+                        
+                        let end_msg = WSMessage::SpeechEnded {
+                            timestamp: now.elapsed().as_secs_f64(),
+                        };
+                        let _ = tx_clone.send(end_msg).await;
+                    }
+                    
+                    // Reset state
+                    accumulated_text_clone.clear();
+                    speech_active_clone = false;
+                }
+            }
+        });
     }
 }
