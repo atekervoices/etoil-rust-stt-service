@@ -107,7 +107,7 @@ impl WebSocketHandler {
                                         // Initialize stream state
                                         let model = self.model.read().await;
                                         let stream_cfg = StreamConfig::new()
-                                            .with_window_duration(0.5)  // Minimum viable window for fast TTFB (was 8.0)
+                                            .with_window_duration(1.0)  // Optimal for fast TTFB (was 8.0)
                                             .with_step_duration(0.1)    // Very frequent updates (was 0.5)
                                             .with_emit_partial(true)
                                             .with_pad_partial(true)     // Enable padding for faster first result
