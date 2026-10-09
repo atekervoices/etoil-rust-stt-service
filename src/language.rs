@@ -15,6 +15,8 @@ pub enum SupportedLanguage {
     Luganda,
     #[serde(rename = "en")]
     English,
+    #[serde(rename = "en-gb")]
+    EnglishGB,
     #[serde(rename = "auto")]
     Auto,
 }
@@ -26,7 +28,10 @@ impl SupportedLanguage {
         let normalized = lang.trim().to_lowercase();
         match normalized.as_str() {
             "lg" | "lug" | "luganda" => Ok(SupportedLanguage::Luganda),
-            "en" | "eng" | "english" | "en-us" | "en-gb" | "en_us" | "en_gb" => {
+            "en-gb" | "eng-gb" | "en_gb" | "uk" | "british" | "commonwealth" => {
+                Ok(SupportedLanguage::EnglishGB)
+            }
+            "en" | "eng" | "english" | "en-us" | "en_us" | "us" | "american" => {
                 Ok(SupportedLanguage::English)
             }
             "auto" | "" | "default" => Ok(SupportedLanguage::Auto),
@@ -35,7 +40,7 @@ impl SupportedLanguage {
                     .to_string(),
             ),
             other => Err(format!(
-                "Unsupported language '{other}'. This service supports Luganda ('lg', 'luganda'), English ('en', 'english'), or 'auto'. Shona ('sn') is excluded."
+                "Unsupported language '{other}'. This service supports Luganda ('lg'), English ('en', 'en-gb', 'en-us'), or 'auto'. Shona ('sn') is excluded."
             )),
         }
     }
@@ -43,12 +48,13 @@ impl SupportedLanguage {
     /// Target language code configured in Nemotron (parakeet-rs).
     ///
     /// Per Crane AI Labs model card for crane-nemo-asr-1.1:
-    /// "Best results use the language-ID prompt set to auto-detect;
-    ///  Luganda and Shona do not have a dedicated prompt slot, so auto-detect is recommended for them."
+    /// - "en-GB" (prompt 1) / "en-US" (prompt 0) locks decoder to English.
+    /// - "auto" (prompt 101) activates language ID (recommended for Luganda).
     pub fn to_nemotron_lang(self) -> &'static str {
         match self {
             SupportedLanguage::Luganda => "auto",
             SupportedLanguage::English => "en-US",
+            SupportedLanguage::EnglishGB => "en-GB",
             SupportedLanguage::Auto => "auto",
         }
     }
@@ -58,6 +64,7 @@ impl SupportedLanguage {
         match self {
             SupportedLanguage::Luganda => "lg",
             SupportedLanguage::English => "en",
+            SupportedLanguage::EnglishGB => "en-gb",
             SupportedLanguage::Auto => "auto",
         }
     }
@@ -66,7 +73,8 @@ impl SupportedLanguage {
     pub fn name(self) -> &'static str {
         match self {
             SupportedLanguage::Luganda => "Luganda",
-            SupportedLanguage::English => "English",
+            SupportedLanguage::English => "English (US)",
+            SupportedLanguage::EnglishGB => "English (UK / Commonwealth)",
             SupportedLanguage::Auto => "Auto-Detect",
         }
     }
