@@ -1,18 +1,66 @@
-# CPU-only Dockerfile for Canary STT Service
-# Use this if you don't have NVIDIA GPU or nvidia-docker2
+# ==============================================================================
+# Multi-stage Dockerfile for Crane Nemotron Streaming STT Service (CPU-only)
+# Completely Self-Contained: Automatically downloads, exports model & compiles Rust
+# ==============================================================================
 
-# Stage 1: Build
+# ------------------------------------------------------------------------------
+# Stage 1: Model Downloader & ONNX Exporter
+# ------------------------------------------------------------------------------
+FROM python:3.10-slim AS model-exporter
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git \
+    curl \
+    build-essential \
+    libsndfile1 \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /export
+
+# Install lightweight CPU PyTorch (exporting FastConformer graph is done on CPU)
+RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# Install export requirements and NeMo toolkit
+RUN pip install --no-cache-dir \
+    "numpy<2.0" \
+    onnx \
+    onnxruntime \
+    soundfile \
+    sentencepiece \
+    huggingface_hub \
+    "nemo_toolkit[asr]"
+
+# Copy export helper scripts
+COPY scripts/download_model.py /export/download_model.py
+COPY scripts/export_crane_nemotron.py /export/export_crane_nemotron.py
+
+# Download the Crane Nemotron model (.nemo) from Hugging Face
+RUN python3 /export/download_model.py --output-dir /export/models
+
+# Export .nemo to parakeet-rs ONNX format
+RUN python3 /export/export_crane_nemotron.py /export/models/crane-nemo-asr-1.1.nemo /export/crane-nemo-asr-1.1-onnx
+
+# Clean up raw .nemo checkpoint to minimize any layer disk usage
+RUN rm -rf /export/models
+
+# ------------------------------------------------------------------------------
+# Stage 2: Rust Service Builder (CPU)
+# ------------------------------------------------------------------------------
 FROM ubuntu:24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install build dependencies and Rust
 RUN apt-get update && apt-get install -y \
     curl \
     pkg-config \
     libssl-dev \
     libasound2-dev \
     g++ \
+    git \
     ca-certificates \
     && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
     && rm -rf /var/lib/apt/lists/*
@@ -21,45 +69,46 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 
 WORKDIR /app
 
-# Copy source code
+# Copy source code and static web assets
 COPY . .
 
-# Build the application
-RUN cargo build --release
+# Build the release binary with CPU defaults
+RUN cargo build --release --bin api_server
 
-# Stage 2: Runtime (CPU only)
+# ------------------------------------------------------------------------------
+# Stage 3: Minimal Production Runtime (CPU only)
+# ------------------------------------------------------------------------------
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install runtime dependencies
+# Install runtime dependencies (no Python or build toolchains in final image!)
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3t64 \
+    libasound2 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy the binary from builder stage
+# 1. Copy compiled Rust binary
 COPY --from=builder /app/target/release/api_server /app/api_server
 
-# Copy model directory (if it exists in the build context)
-COPY canary-180m-flash-int8 ./canary-180m-flash-int8
+# 2. Copy the exported ONNX model files from stage 1
+COPY --from=model-exporter /export/crane-nemo-asr-1.1-onnx /app/crane-nemo-asr-1.1-onnx
 
-# Create directory for test audio
-RUN mkdir -p /app/audio
-
-# Expose the API port
+# Expose HTTP / WebSocket API port
 EXPOSE 8080
 
-# Set environment variables
+# Environment variables
 ENV RUST_LOG=info
-ENV MODEL_PATH=/app/canary-180m-flash-int8
+ENV MODEL_PATH=/app/crane-nemo-asr-1.1-onnx
+ENV PORT=8080
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8080/health || exit 1
 
-# Run the API server
+# Launch the STT API server
 CMD ["/app/api_server"]

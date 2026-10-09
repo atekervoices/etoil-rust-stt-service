@@ -15,8 +15,14 @@ path = "src/live.rs"
 name = "api_server"
 path = "src/api_server.rs"
 
+[features]
+default = []
+cuda = ["parakeet-rs/cuda"]
+
 [dependencies]
-canary-rs = { git = "https://github.com/mmende/canary-rs.git", features = ["cuda"] }
+parakeet-rs = { git = "https://github.com/altunenes/parakeet-rs.git", default-features = false, features = ["cpu", "ort-defaults"] }
+earshot = "1"
+hound = "3.5"
 cpal = "0.17.3"
 tokio = { version = "1.0", features = ["full"] }
 warp = "0.3"

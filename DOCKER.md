@@ -1,223 +1,129 @@
 # Docker Deployment Guide
 
-This guide explains how to deploy the Canary STT service using Docker with GPU support.
+This guide explains how to deploy the Crane Nemotron Streaming ASR service (Luganda & English) with Earshot Neural VAD using Docker.
 
 ## Prerequisites
 
 ### For GPU Support (Recommended)
-- NVIDIA GPU (tested with RTX 2060)
+- NVIDIA GPU (CUDA compatible)
 - NVIDIA drivers installed
 - Docker installed
-- nvidia-docker2 installed
+- NVIDIA Container Toolkit (`nvidia-docker2`) installed
 
 ### For CPU-Only
 - Docker installed
 
+---
+
 ## Quick Start
 
-### With GPU Support (Recommended)
+### With GPU Support (CUDA Acceleration)
 
-1. **Build and run with docker-compose:**
+1. **Build and start service:**
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 2. **Check logs:**
 ```bash
-docker-compose logs -f
+docker compose logs -f
 ```
 
-3. **Test the service:**
+3. **Verify health check:**
 ```bash
 curl http://localhost:8080/health
 ```
 
-### CPU-Only Version
-
-If you don't have NVIDIA GPU or nvidia-docker2:
-
-1. **Edit docker-compose.yml** to use the CPU version:
-```yaml
-services:
-  canary-stt:
-    build:
-      context: .
-      dockerfile: Dockerfile.cpu  # Change to CPU version
+Expected output:
+```json
+{
+  "status": "healthy",
+  "model": "CraneAILabs/crane-nemo-asr-1.1 (Nemotron 3.5 Streaming)",
+  "supported_languages": ["lg (Luganda)", "en (English)", "auto (Auto-detect)"],
+  "excluded_languages": ["sn (Shona - disabled)"],
+  "chunk_size_samples": 8960,
+  "chunk_duration_ms": 560
+}
 ```
 
-2. **Build and run:**
-```bash
-docker-compose up -d
-```
+---
 
 ## Manual Docker Commands
 
-### Build the Image
+### 1. Build Docker Images
 
-**GPU version:**
+**GPU version (CUDA):**
 ```bash
-docker build -t canary-stt:latest .
+docker build -t crane-nemotron-stt:latest -f Dockerfile .
 ```
 
 **CPU version:**
 ```bash
-docker build -f Dockerfile.cpu -t canary-stt:cpu .
+docker build -t crane-nemotron-stt:cpu -f Dockerfile.cpu .
 ```
 
-### Run the Container
+### 2. Run Container (No Host Volumes Required)
 
-**With GPU support:**
+Because the model weights and Rust binary are both baked into the container during the multi-stage build, no host volume flags are required:
+
+**GPU Version (CUDA):**
 ```bash
 docker run -d \
-  --name canary-stt \
+  --name crane-nemotron-stt \
   --gpus all \
   -p 8080:8080 \
-  -v $(pwd)/canary-180m-flash-int8:/app/canary-180m-flash-int8:ro \
-  -v $(pwd)/audio:/app/audio:ro \
-  canary-stt:latest
+  crane-nemotron-stt:latest
 ```
 
-**CPU only:**
+**CPU Version:**
 ```bash
 docker run -d \
-  --name canary-stt \
+  --name crane-nemotron-stt \
   -p 8080:8080 \
-  -v $(pwd)/canary-180m-flash-int8:/app/canary-180m-flash-int8:ro \
-  -v $(pwd)/audio:/app/audio:ro \
-  canary-stt:cpu
+  crane-nemotron-stt:cpu
 ```
 
-## Configuration
+*(Optional: If you ever want to override the baked-in model with external weights, you can pass `-v $(pwd)/custom-model:/app/crane-nemo-asr-1.1-onnx:ro`)*
 
-### Environment Variables
+---
 
-- `RUST_LOG` - Log level (default: `info`)
-- `MODEL_PATH` - Path to the model directory (default: `/app/canary-180m-flash-int8`)
+## Testing Containerized Endpoints
 
-### Volumes
-
-- `/app/canary-180m-flash-int8` - Model directory (read-only)
-- `/app/audio` - Audio files directory (read-only)
-
-## Testing the Deployment
-
-### Health Check
+### 1. Health Check
 ```bash
 curl http://localhost:8080/health
 ```
 
-### Single File Transcription
+### 2. Luganda Transcription (Single File)
 ```bash
 curl -X POST \
-  http://localhost:8080/v1/transcribe/canary?sample_rate=16000 \
+  "http://localhost:8080/v1/transcribe?language=lg" \
   -H "Content-Type: application/octet-stream" \
-  --data-binary @audio/test.wav
+  --data-binary @audio/luganda_sample.wav
 ```
 
-### Batch Upload
+### 3. Batch Transcription (Multiple Files)
 ```bash
 curl -X POST \
-  http://localhost:8080/v1/transcribe/batch?sample_rate=16000 \
-  -F "files=@audio/test1.wav" \
-  -F "files=@audio/test2.wav"
+  "http://localhost:8080/v1/transcribe/batch?language=en" \
+  -F "file1=@audio/sample1.wav" \
+  -F "file2=@audio/sample2.wav"
 ```
 
-### WebSocket
+### 4. Verify Shona is Excluded
 ```bash
-wscat -c ws://localhost:8080/ws
+curl -X POST \
+  "http://localhost:8080/v1/transcribe?language=sn" \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @audio/sample.wav
+```
+Response:
+```json
+{"error": "Language 'shona' (sn) is explicitly disabled in this service configuration."}
 ```
 
-## GPU Detection
-
-The service automatically detects and uses GPU if available. You'll see in the logs:
-- `✅ Using CUDA GPU acceleration` - GPU is being used
-- `⚠️ CUDA not available, falling back to CPU` - CPU fallback
-
-## Troubleshooting
-
-### GPU Not Detected
-
-If you see "CUDA not available" message:
-1. Check NVIDIA drivers: `nvidia-smi`
-2. Verify nvidia-docker2 installation: `docker run --rm --gpus all nvidia/cuda:12.1.0-base-ubuntu22.04 nvidia-smi`
-3. Check Docker GPU support: `docker run --rm --gpus all ubuntu nvidia-smi`
-
-### Build Errors
-
-If you encounter build errors:
-1. Ensure Docker has enough memory (at least 4GB)
-2. Check Rust version compatibility
-3. Try cleaning Docker cache: `docker system prune -a`
-
-### Model Not Found
-
-If the model directory is missing:
-1. Ensure `canary-180m-flash-int8` directory exists
-2. Check volume mounting in docker-compose.yml
-3. Verify the model path is correct
-
-## Performance
-
-### Expected Performance with GPU (RTX 2060)
-- **Single file:** ~100-500ms latency
-- **Batch processing:** 10-50x faster than CPU
-- **Concurrent requests:** High throughput with GPU acceleration
-
-### CPU Performance
-- **Single file:** ~3-4 seconds latency
-- **Batch processing:** Limited by CPU cores
-- **Concurrent requests:** Moderate throughput
-
-## Production Deployment
-
-For production deployment, consider:
-
-1. **Resource Limits:**
-```yaml
-deploy:
-  resources:
-    limits:
-      memory: 4G
-      reservations:
-        memory: 2G
-```
-
-2. **Logging:**
-```yaml
-logging:
-  driver: "json-file"
-  options:
-    max-size: "10m"
-    max-file: "3"
-```
-
-3. **Security:**
-- Use HTTPS/TLS
-- Add authentication
-- Network isolation
-- Regular security updates
-
-## Monitoring
-
-### Container Health
-```bash
-docker ps
-docker inspect canary-stt
-```
-
-### Logs
-```bash
-docker logs -f canary-stt
-```
-
-### Resource Usage
-```bash
-docker stats canary-stt
-```
-
-## Support
-
-For issues related to:
-- **Docker:** Check Docker documentation
-- **NVIDIA GPU:** Check NVIDIA Docker documentation
-- **Canary STT:** Check the main project documentation
+### 5. WebSocket Streaming & Documentation
+- **Live WebSocket**: `ws://localhost:8080/v1/realtime?language=lg`
+- **Interactive Documentation**: `http://localhost:8080/docs`
+- **OpenAPI 3.0 Spec**: `http://localhost:8080/docs/openapi.json`
+- **Web Demo Interface**: `http://localhost:8080/`

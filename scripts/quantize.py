@@ -1,104 +1,73 @@
+#!/usr/bin/env python3
+"""
+Dynamic INT8 quantization script for Nemotron Streaming ONNX models.
+Reduces model size from ~2.4GB to ~650MB and accelerates CPU inference.
+"""
+
 import os
 import shutil
+import argparse
+
 
 def quantize_model(input_dir, output_dir):
-    """Quantize ONNX models to int8 using dynamic quantization"""
-    
-    # Import here after dependencies are installed
     try:
         import onnx
         from onnxruntime.quantization import quantize_dynamic, QuantType
     except ImportError as e:
         print(f"Error importing required modules: {e}")
-        print("Please install dependencies first: pip3 install onnx onnxruntime")
+        print("Please install dependencies: pip install onnx onnxruntime")
         return False
-    
-    # Create output directory if it doesn't exist
+
     os.makedirs(output_dir, exist_ok=True)
-    
-    # Files to quantize
+
     models_to_quantize = [
-        ("encoder-model.onnx", "encoder-model.int8.onnx"),
-        ("decoder-model.onnx", "decoder-model.int8.onnx")
+        ("encoder.onnx", "encoder.onnx"),
+        ("decoder_joint.onnx", "decoder_joint.onnx"),
     ]
-    
+
     for input_file, output_file in models_to_quantize:
         input_path = os.path.join(input_dir, input_file)
         output_path = os.path.join(output_dir, output_file)
-        
-        print(f"Quantizing {input_file}...")
-        
+
+        if not os.path.exists(input_path):
+            print(f"⚠️  Skipping {input_file} (not found in {input_dir})")
+            continue
+
+        print(f"Quantizing {input_file} to INT8...")
+
         try:
-            # Apply dynamic quantization
             quantize_dynamic(
                 model_input=input_path,
                 model_output=output_path,
                 weight_type=QuantType.QInt8,
                 optimize_model=True
             )
-            
-            # Get file sizes for comparison
-            original_size = os.path.getsize(input_path) / (1024 * 1024)  # MB
-            quantized_size = os.path.getsize(output_path) / (1024 * 1024)  # MB
-            
-            print(f" {input_file} quantized successfully!")
-            print(f"  Original: {original_size:.1f} MB")
-            print(f"  Quantized: {quantized_size:.1f} MB")
-            print(f"  Size reduction: {((original_size - quantized_size) / original_size * 100):.1f}%")
-            print()
-            
+
+            orig_mb = os.path.getsize(input_path) / (1024 * 1024)
+            quant_mb = os.path.getsize(output_path) / (1024 * 1024)
+            reduction = ((orig_mb - quant_mb) / orig_mb * 100) if orig_mb > 0 else 0
+
+            print(f"✅ {input_file} quantized successfully!")
+            print(f"   Original: {orig_mb:.1f} MB -> Quantized: {quant_mb:.1f} MB (-{reduction:.1f}%)\n")
         except Exception as e:
-            print(f" Error quantizing {input_file}: {str(e)}")
-            return False
-    
-    # Copy vocab.txt to output directory
-    vocab_input = os.path.join(input_dir, "vocab.txt")
-    vocab_output = os.path.join(output_dir, "vocab.txt")
-    
-    if os.path.exists(vocab_input):
-        shutil.copy2(vocab_input, vocab_output)
-        print(f" vocab.txt copied to output directory")
-    
-    print("Quantization complete!")
+            print(f"❌ Error quantizing {input_file}: {e}")
+
+    # Copy tokenizer.model and config.json
+    for extra in ["tokenizer.model", "config.json", "vocab.txt"]:
+        src = os.path.join(input_dir, extra)
+        dst = os.path.join(output_dir, extra)
+        if os.path.exists(src):
+            shutil.copy2(src, dst)
+            print(f"Copied {extra} to {output_dir}")
+
+    print(f"\n✅ Quantized model ready in: {output_dir}")
     return True
 
+
 if __name__ == "__main__":
-    # Input and output directories
-    input_directory = "canary-180m-flash"
-    output_directory = "canary-180m-flash-int8"
-    
-    print("Starting ONNX model quantization...")
-    print(f"Input directory: {input_directory}")
-    print(f"Output directory: {output_directory}")
-    print()
-    
-    # Install dependencies using uv pip
-    print("Installing dependencies...")
-    import subprocess
-    import sys
-    
-    try:
-        # Use uv pip to install to the current Python environment
-        result = subprocess.run([sys.executable, "-m", "uv", "pip", "install", "onnx", "onnxruntime"], 
-                              check=True, capture_output=True, text=True)
-        print("✓ Dependencies installed successfully with uv pip")
-    except subprocess.CalledProcessError:
-        print("Trying pip as fallback...")
-        subprocess.run([sys.executable, "-m", "pip", "install", "onnx", "onnxruntime"], check=True)
-    print()
-    
-    # Check if input directory exists
-    if not os.path.exists(input_directory):
-        print(f"Error: Input directory '{input_directory}' not found!")
-        print("Make sure you have downloaded the original model files first.")
-        exit(1)
-    
-    # Run quantization
-    success = quantize_model(input_directory, output_directory)
-    
-    if success:
-        print("\n All models quantized successfully!")
-        print(f"You can now use the quantized models from: {output_directory}")
-        print("Update your code to point to this directory for faster inference.")
-    else:
-        print("\n Quantization failed. Check the error messages above.")
+    parser = argparse.ArgumentParser(description="Quantize Nemotron ONNX models to INT8")
+    parser.add_argument("--input-dir", default="./crane-nemo-asr-1.1-onnx", help="Input ONNX directory")
+    parser.add_argument("--output-dir", default="./crane-nemo-asr-1.1-onnx-int8", help="Output INT8 directory")
+    args = parser.parse_args()
+
+    quantize_model(args.input_dir, args.output_dir)

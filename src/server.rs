@@ -1,13 +1,16 @@
-use canary_rs::{Canary, ExecutionConfig, ExecutionProvider};
+use bytes::Bytes;
+use multer::Multipart;
+use parakeet_rs::{Nemotron, NemotronMode};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::RwLock;
-use warp::{Filter, ws::Ws};
+use tokio::sync::Mutex;
 use utoipa::OpenApi;
-use futures::future;
-use multer::Multipart;
-use bytes::Bytes;
+use warp::{ws::Ws, Filter};
+
+use crate::language::{CHUNK_DURATION_MS, CHUNK_SIZE, SAMPLE_RATE, SupportedLanguage};
+use crate::vad_implementation::normalize_punctuation_spacing;
+use crate::websocket::WebSocketHandler;
 
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -15,11 +18,14 @@ pub struct TranscriptionResponse {
     pub text: String,
     pub processing_time: f64,
     pub audio_duration: f64,
+    pub real_time_factor: f64,
+    pub language: String,
 }
 
 #[derive(Debug, Deserialize, utoipa::IntoParams, utoipa::ToSchema)]
 pub struct TranscriptionQuery {
     pub sample_rate: Option<u32>,
+    pub language: Option<String>,
     pub source_lang: Option<String>,
     pub target_lang: Option<String>,
 }
@@ -27,15 +33,14 @@ pub struct TranscriptionQuery {
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct BatchAudioFile {
     pub name: String,
-    pub data: Vec<u8>, // raw binary audio data
+    pub data: Vec<u8>,
     pub sample_rate: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct BatchTranscriptionRequest {
     pub files: Vec<BatchAudioFile>,
-    pub source_lang: Option<String>,
-    pub target_lang: Option<String>,
+    pub language: Option<String>,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -44,6 +49,7 @@ pub struct BatchTranscriptionResult {
     pub text: String,
     pub processing_time: f64,
     pub audio_duration: f64,
+    pub real_time_factor: f64,
     pub success: bool,
     pub error: Option<String>,
 }
@@ -57,80 +63,182 @@ pub struct BatchTranscriptionResponse {
     pub failed_files: usize,
 }
 
+/// Unified response: returns single object if 1 file was uploaded, or batch object if multiple files.
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(untagged)]
+pub enum TranscribeResponse {
+    Single(TranscriptionResponse),
+    Batch(BatchTranscriptionResponse),
+}
+
 #[derive(utoipa::ToSchema, Serialize)]
 struct HealthResponse {
     status: String,
     model: String,
+    vad_engine: String,
+    supported_languages: Vec<String>,
+    excluded_languages: Vec<String>,
+    chunk_size_samples: usize,
+    chunk_duration_ms: usize,
 }
 
-#[utoipa::path(
-    get,
-    path = "/health",
-    responses(
-        (status = 200, description = "Health check successful", body = HealthResponse)
-    ),
-    tag = "Health"
-)]
 async fn health_check() -> impl warp::Reply {
     warp::reply::json(&HealthResponse {
         status: "healthy".to_string(),
-        model: "canary-rs".to_string(),
+        model: "CraneAILabs/crane-nemo-asr-1.1 (Nemotron 3.5 Streaming)".to_string(),
+        vad_engine: "Earshot (pyke.io, 3,600x RTF neural VAD)".to_string(),
+        supported_languages: vec![
+            "lg (Luganda)".to_string(),
+            "en (English)".to_string(),
+            "auto (Auto-detect)".to_string(),
+        ],
+        excluded_languages: vec!["sn (Shona - disabled)".to_string()],
+        chunk_size_samples: CHUNK_SIZE,
+        chunk_duration_ms: CHUNK_DURATION_MS,
     })
 }
 
-#[utoipa::path(
-    post,
-    path = "/v1/transcribe/canary",
-    request_body(content = Vec<u8>, description = "Raw audio data in 16-bit PCM format", content_type = "application/octet-stream"),
-    params(
-        TranscriptionQuery
-    ),
-    responses(
-        (status = 200, description = "Transcription successful", body = TranscriptionResponse),
-        (status = 400, description = "Invalid content type"),
-        (status = 500, description = "Transcription failed")
-    ),
-    tag = "Transcription"
-)]
-async fn transcribe_audio(
-    content_type: String,
-    query: TranscriptionQuery,
-    body: bytes::Bytes,
-    service: Arc<CanaryService>,
-) -> Result<impl warp::Reply, warp::Rejection> {
-    if !content_type.starts_with("application/octet-stream") {
-        return Err(warp::reject::custom(ApiError::InvalidContentType));
+fn parse_audio_samples(data: &[u8]) -> Result<Vec<f32>, String> {
+    // Check if data is a WAV file container
+    if data.starts_with(b"RIFF") && data.len() > 44 {
+        let cursor = std::io::Cursor::new(data);
+        if let Ok(mut reader) = hound::WavReader::new(cursor) {
+            let spec = reader.spec();
+            let mut samples: Vec<f32> = match spec.sample_format {
+                hound::SampleFormat::Float => {
+                    reader.samples::<f32>().map(|s| s.unwrap_or(0.0)).collect()
+                }
+                hound::SampleFormat::Int => reader
+                    .samples::<i16>()
+                    .map(|s| s.unwrap_or(0) as f32 / 32768.0)
+                    .collect(),
+            };
+            if spec.channels > 1 {
+                samples = samples.chunks(spec.channels as usize).map(|c| c[0]).collect();
+            }
+            return Ok(samples);
+        }
     }
 
-    let sample_rate = query.sample_rate.unwrap_or(16000);
-    let source_lang = query.source_lang.unwrap_or_else(|| "en".to_string());
-    let target_lang = query.target_lang.unwrap_or_else(|| "en".to_string());
-    
-    match service
-        .transcribe_raw_audio(body.to_vec(), sample_rate, &source_lang, &target_lang)
-        .await
-    {
-        Ok(response) => {
-            let reply = warp::reply::json(&response);
-            Ok(warp::reply::with_status(reply, warp::http::StatusCode::OK))
-        }
-        Err(e) => {
-            eprintln!("Transcription error: {}", e);
-            Err(warp::reject::custom(ApiError::TranscriptionFailed(
-                e.to_string(),
-            )))
-        }
+    // Default to raw 16-bit PCM little-endian
+    let mut samples = Vec::with_capacity(data.len() / 2);
+    for chunk in data.chunks_exact(2) {
+        let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0;
+        samples.push(sample);
     }
+    Ok(samples)
 }
 
-
-async fn transcribe_multipart_batch(
+/// Unified transcription handler (AssemblyAI / Industry Standard):
+/// - Accepts raw binary audio (application/octet-stream, audio/wav)
+/// - Accepts multipart/form-data:
+///     - 1 file uploaded -> returns single TranscriptionResponse directly
+///     - 2+ files uploaded -> returns BatchTranscriptionResponse
+async fn transcribe_unified_handler(
     content_type: String,
     query: TranscriptionQuery,
     body: Bytes,
-    service: Arc<CanaryService>,
+    service: Arc<NemotronService>,
 ) -> Result<impl warp::Reply, warp::Rejection> {
-    // Validate content type for multipart
+    let lang_str = query
+        .language
+        .or(query.source_lang)
+        .or(query.target_lang)
+        .unwrap_or_else(|| "auto".to_string());
+
+    let language = SupportedLanguage::parse(&lang_str)
+        .map_err(|e| warp::reject::custom(ApiError::LanguageError(e)))?;
+
+    if content_type.starts_with("multipart/form-data") {
+        let boundary = content_type
+            .split("boundary=")
+            .nth(1)
+            .ok_or_else(|| warp::reject::custom(ApiError::InvalidContentType))?;
+
+        let stream = futures::stream::once(async move { Ok::<_, multer::Error>(body) });
+        let mut multipart = Multipart::new(stream, boundary);
+
+        let mut files = Vec::new();
+
+        while let Some(field) = multipart.next_field().await.map_err(|e| {
+            warp::reject::custom(ApiError::TranscriptionFailed(format!("Multipart error: {e}")))
+        })? {
+            let name = field.file_name().unwrap_or("audio.wav").to_string();
+            let data = field.bytes().await.map_err(|e| {
+                warp::reject::custom(ApiError::TranscriptionFailed(format!(
+                    "Failed to read file: {e}"
+                )))
+            })?;
+
+            files.push(BatchAudioFile {
+                name,
+                data: data.to_vec(),
+                sample_rate: query.sample_rate,
+            });
+        }
+
+        if files.is_empty() {
+            return Err(warp::reject::custom(ApiError::TranscriptionFailed(
+                "No audio files found in request".to_string(),
+            )));
+        }
+
+        if files.len() == 1 {
+            // Single file uploaded via multipart (AssemblyAI Sync STT style)
+            let single_file = files.into_iter().next().unwrap();
+            match service
+                .transcribe_audio_bytes(&single_file.data, language)
+                .await
+            {
+                Ok(resp) => {
+                    let reply = warp::reply::json(&TranscribeResponse::Single(resp));
+                    Ok(warp::reply::with_status(reply, warp::http::StatusCode::OK))
+                }
+                Err(e) => Err(warp::reject::custom(ApiError::TranscriptionFailed(
+                    e.to_string(),
+                ))),
+            }
+        } else {
+            // Multiple files uploaded (batch)
+            let batch_request = BatchTranscriptionRequest {
+                files,
+                language: Some(language.code().to_string()),
+            };
+            match service.transcribe_batch(batch_request, language).await {
+                Ok(resp) => {
+                    let reply = warp::reply::json(&TranscribeResponse::Batch(resp));
+                    Ok(warp::reply::with_status(reply, warp::http::StatusCode::OK))
+                }
+                Err(e) => Err(warp::reject::custom(ApiError::TranscriptionFailed(
+                    e.to_string(),
+                ))),
+            }
+        }
+    } else if content_type.starts_with("application/octet-stream")
+        || content_type.starts_with("audio/")
+    {
+        // Raw audio bytes (PCM16 or WAV)
+        match service.transcribe_audio_bytes(body.as_ref(), language).await {
+            Ok(resp) => {
+                let reply = warp::reply::json(&TranscribeResponse::Single(resp));
+                Ok(warp::reply::with_status(reply, warp::http::StatusCode::OK))
+            }
+            Err(e) => Err(warp::reject::custom(ApiError::TranscriptionFailed(
+                e.to_string(),
+            ))),
+        }
+    } else {
+        Err(warp::reject::custom(ApiError::InvalidContentType))
+    }
+}
+
+/// Explicit batch endpoint: always returns BatchTranscriptionResponse
+async fn transcribe_explicit_batch_handler(
+    content_type: String,
+    query: TranscriptionQuery,
+    body: Bytes,
+    service: Arc<NemotronService>,
+) -> Result<impl warp::Reply, warp::Rejection> {
     if !content_type.starts_with("multipart/form-data") {
         return Err(warp::reject::custom(ApiError::InvalidContentType));
     }
@@ -144,19 +252,23 @@ async fn transcribe_multipart_batch(
     let mut multipart = Multipart::new(stream, boundary);
 
     let mut files = Vec::new();
-    let source_lang = query.source_lang.unwrap_or_else(|| "en".to_string());
-    let target_lang = query.target_lang.unwrap_or_else(|| "en".to_string());
+    let lang_str = query
+        .language
+        .or(query.source_lang)
+        .or(query.target_lang)
+        .unwrap_or_else(|| "auto".to_string());
 
-    // Process each file in the multipart request
+    let language = SupportedLanguage::parse(&lang_str)
+        .map_err(|e| warp::reject::custom(ApiError::LanguageError(e)))?;
+
     while let Some(field) = multipart.next_field().await.map_err(|e| {
-        warp::reject::custom(ApiError::TranscriptionFailed(format!("Multipart error: {}", e)))
+        warp::reject::custom(ApiError::TranscriptionFailed(format!("Multipart error: {e}")))
     })? {
-        let name = field.file_name()
-            .unwrap_or("unknown")
-            .to_string();
-        
+        let name = field.file_name().unwrap_or("audio.wav").to_string();
         let data = field.bytes().await.map_err(|e| {
-            warp::reject::custom(ApiError::TranscriptionFailed(format!("Failed to read file: {}", e)))
+            warp::reject::custom(ApiError::TranscriptionFailed(format!(
+                "Failed to read file: {e}"
+            )))
         })?;
 
         files.push(BatchAudioFile {
@@ -168,165 +280,145 @@ async fn transcribe_multipart_batch(
 
     if files.is_empty() {
         return Err(warp::reject::custom(ApiError::TranscriptionFailed(
-            "No files found in request".to_string(),
+            "No audio files found in request".to_string(),
         )));
     }
 
     let batch_request = BatchTranscriptionRequest {
         files,
-        source_lang: Some(source_lang),
-        target_lang: Some(target_lang),
+        language: Some(language.code().to_string()),
     };
 
-    match service.transcribe_batch(batch_request).await {
+    match service.transcribe_batch(batch_request, language).await {
         Ok(response) => {
             let reply = warp::reply::json(&response);
             Ok(warp::reply::with_status(reply, warp::http::StatusCode::OK))
         }
-        Err(e) => {
-            eprintln!("Multipart batch transcription error: {}", e);
-            Err(warp::reject::custom(ApiError::TranscriptionFailed(
-                e.to_string(),
-            )))
-        }
+        Err(e) => Err(warp::reject::custom(ApiError::TranscriptionFailed(
+            e.to_string(),
+        ))),
     }
 }
 
-// ApiDoc struct is used for manual OpenAPI specification
-
-#[derive(Clone)]
-pub struct CanaryService {
-    model: Arc<RwLock<Canary>>,
+pub struct NemotronService {
+    pub model_path: Arc<String>,
+    shared_model: Arc<Mutex<Nemotron>>,
 }
 
-impl CanaryService {
+impl NemotronService {
     pub async fn new(model_path: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        println!("Loading Canary model from: {}", model_path);
-        
-        // Auto-detect best execution provider: CUDA GPU if available, otherwise CPU
-        let config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cuda);
-        let model = match Canary::from_pretrained(model_path, Some(config)) {
-            Ok(model) => {
-                println!("✅ Using CUDA GPU acceleration");
-                model
-            }
-            Err(_) => {
-                println!("⚠️  CUDA not available, falling back to CPU");
-                let cpu_config = ExecutionConfig::new().with_execution_provider(ExecutionProvider::Cpu);
-                Canary::from_pretrained(model_path, Some(cpu_config))?
-            }
-        };
-        
-        println!("✅ Canary model loaded successfully!");
-        
+        println!("Loading Crane Nemotron model from: {model_path}");
+
+        let model = Nemotron::from_pretrained(model_path, None)?;
+        println!(
+            "Crane Nemotron model loaded successfully! Mode: {:?}",
+            model.mode()
+        );
+
         Ok(Self {
-            model: Arc::new(RwLock::new(model)),
+            model_path: Arc::new(model_path.to_string()),
+            shared_model: Arc::new(Mutex::new(model)),
         })
     }
 
-    pub async fn transcribe_raw_audio(
+    pub async fn transcribe_audio_bytes(
         &self,
-        audio_data: Vec<u8>,
-        sample_rate: u32,
-        source_lang: &str,
-        target_lang: &str,
+        audio_data: &[u8],
+        language: SupportedLanguage,
     ) -> Result<TranscriptionResponse, Box<dyn std::error::Error + Send + Sync>> {
         let start_time = Instant::now();
-        
-        // Convert bytes to f32 samples (assuming 16-bit PCM)
-        let mut samples = Vec::new();
-        for chunk in audio_data.chunks_exact(2) {
-            if chunk.len() == 2 {
-                let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0;
-                samples.push(sample);
+        let samples = parse_audio_samples(audio_data)?;
+        let audio_duration = samples.len() as f64 / SAMPLE_RATE as f64;
+
+        let mut model = self.shared_model.lock().await;
+        model.reset();
+
+        if model.mode() == NemotronMode::Multilingual {
+            model.set_target_lang(language.to_nemotron_lang())?;
+        }
+
+        let mut full_text = String::new();
+
+        // Process in 560ms chunks (8960 samples)
+        for chunk in samples.chunks(CHUNK_SIZE) {
+            let chunk_data: Vec<f32> = if chunk.len() < CHUNK_SIZE {
+                let mut padded = chunk.to_vec();
+                padded.resize(CHUNK_SIZE, 0.0);
+                padded
+            } else {
+                chunk.to_vec()
+            };
+
+            let delta = model.transcribe_chunk(&chunk_data)?;
+            if !delta.trim().is_empty() {
+                if !full_text.is_empty() && !full_text.ends_with(' ') {
+                    full_text.push(' ');
+                }
+                full_text.push_str(delta.trim());
             }
         }
-        
-        let audio_duration = samples.len() as f64 / sample_rate as f64;
-        
-        // Get model session
-        let model = self.model.read().await;
-        let mut session = model.session();
-        
-        // Transcribe
-        let result = session.transcribe_samples(&samples, sample_rate as usize, 1, source_lang, target_lang)?;
-        
+
+        model.reset();
+
         let processing_time = start_time.elapsed().as_secs_f64();
-        
+        let real_time_factor = if audio_duration > 0.0 {
+            processing_time / audio_duration
+        } else {
+            0.0
+        };
+
         Ok(TranscriptionResponse {
-            text: result.text,
+            text: normalize_punctuation_spacing(full_text.trim()),
             processing_time,
             audio_duration,
+            real_time_factor,
+            language: language.code().to_string(),
         })
     }
 
     pub async fn transcribe_batch(
         &self,
         request: BatchTranscriptionRequest,
+        language: SupportedLanguage,
     ) -> Result<BatchTranscriptionResponse, Box<dyn std::error::Error + Send + Sync>> {
         let start_time = Instant::now();
-        let source_lang = request.source_lang.unwrap_or_else(|| "en".to_string());
-        let target_lang = request.target_lang.unwrap_or_else(|| "en".to_string());
-        
         let mut results = Vec::new();
         let mut successful_files = 0;
         let mut failed_files = 0;
-        
-        // Process files in parallel using tokio
-        let source_lang_clone = source_lang.clone();
-        let target_lang_clone = target_lang.clone();
-        
-        let futures: Vec<_> = request.files.into_iter().map(|file| {
-            let service = self.clone();
-            let source_lang = source_lang_clone.clone();
-            let target_lang = target_lang_clone.clone();
-            async move {
-                let file_start_time = std::time::Instant::now();
-                
-                // Use binary audio data directly
-                let audio_data = file.data;
-                let sample_rate = file.sample_rate.unwrap_or(16000);
-                
-                match service.transcribe_raw_audio(audio_data, sample_rate, &source_lang, &target_lang).await {
-                    Ok(response) => {
-                        BatchTranscriptionResult {
-                            name: file.name,
-                            text: response.text,
-                            processing_time: response.processing_time,
-                            audio_duration: response.audio_duration,
-                            success: true,
-                            error: None,
-                        }
-                    }
-                    Err(e) => {
-                        BatchTranscriptionResult {
-                            name: file.name,
-                            text: String::new(),
-                            processing_time: file_start_time.elapsed().as_secs_f64(),
-                            audio_duration: 0.0,
-                            success: false,
-                            error: Some(e.to_string()),
-                        }
-                    }
+
+        for file in request.files {
+            let file_start = Instant::now();
+            match self.transcribe_audio_bytes(&file.data, language).await {
+                Ok(resp) => {
+                    successful_files += 1;
+                    results.push(BatchTranscriptionResult {
+                        name: file.name,
+                        text: resp.text,
+                        processing_time: resp.processing_time,
+                        audio_duration: resp.audio_duration,
+                        real_time_factor: resp.real_time_factor,
+                        success: true,
+                        error: None,
+                    });
+                }
+                Err(e) => {
+                    failed_files += 1;
+                    results.push(BatchTranscriptionResult {
+                        name: file.name,
+                        text: String::new(),
+                        processing_time: file_start.elapsed().as_secs_f64(),
+                        audio_duration: 0.0,
+                        real_time_factor: 0.0,
+                        success: false,
+                        error: Some(e.to_string()),
+                    });
                 }
             }
-        }).collect();
-        
-        // Wait for all transcriptions to complete
-        let batch_results = future::join_all(futures).await;
-        
-        for result in batch_results {
-            if result.success {
-                successful_files += 1;
-            } else {
-                failed_files += 1;
-            }
-            results.push(result);
         }
-        
+
         let total_processing_time = start_time.elapsed().as_secs_f64();
         let total_files = results.len();
-        
+
         Ok(BatchTranscriptionResponse {
             results,
             total_processing_time,
@@ -338,126 +430,111 @@ impl CanaryService {
 }
 
 pub fn with_service(
-    service: Arc<CanaryService>,
-) -> impl Filter<Extract = (Arc<CanaryService>,), Error = std::convert::Infallible> + Clone {
+    service: Arc<NemotronService>,
+) -> impl Filter<Extract = (Arc<NemotronService>,), Error = std::convert::Infallible> + Clone {
     warp::any().map(move || service.clone())
 }
 
-pub async fn run_server(service: Arc<CanaryService>, port: u16) {
+pub async fn run_server(service: Arc<NemotronService>, port: u16) {
     let cors = warp::cors()
         .allow_any_origin()
-        .allow_headers(vec!["content-type"])
+        .allow_headers(vec!["content-type", "authorization"])
         .allow_methods(vec!["GET", "POST", "OPTIONS"]);
 
-    // Health check endpoint
+    // GET /health
     let health = warp::path("health")
         .and(warp::get())
-        .and_then(|| async {
-            Ok::<_, warp::Rejection>(health_check().await)
-        });
+        .and_then(|| async { Ok::<_, warp::Rejection>(health_check().await) });
 
-    // Transcription endpoint
-    let transcribe = warp::path("v1")
+    // POST /v1/transcribe (Single audio transcription)
+    let transcribe_v1 = warp::path("v1")
         .and(warp::path("transcribe"))
-        .and(warp::path("canary"))
+        .and(warp::path::end())
         .and(warp::post())
         .and(warp::header::<String>("content-type"))
         .and(warp::query::<TranscriptionQuery>())
         .and(warp::body::bytes())
         .and(with_service(service.clone()))
-        .and_then(transcribe_audio);
+        .and_then(transcribe_unified_handler);
 
-    // Batch transcription endpoint (multipart/form-data - industry standard like AssemblyAI/Deepgram)
+    // POST /v1/transcribe/batch (Batch audio transcription)
     let batch_transcribe = warp::path("v1")
         .and(warp::path("transcribe"))
         .and(warp::path("batch"))
+        .and(warp::path::end())
         .and(warp::post())
         .and(warp::header::<String>("content-type"))
         .and(warp::query::<TranscriptionQuery>())
         .and(warp::body::bytes())
         .and(with_service(service.clone()))
-        .and_then(transcribe_multipart_batch);
+        .and_then(transcribe_explicit_batch_handler);
 
-    // OpenAPI JSON endpoint
-    let openapi = warp::path("api-docs")
+    // WebSocket: GET /v1/realtime (Real-time live streaming audio)
+    let ws_model_path = service.model_path.clone();
+    let realtime_ws = warp::path("v1")
+        .and(warp::path("realtime"))
+        .and(warp::path::end())
+        .and(warp::ws())
+        .and(warp::query::<TranscriptionQuery>())
+        .and(warp::any().map(move || ws_model_path.clone()))
+        .map(|ws: Ws, query: TranscriptionQuery, model_path: Arc<String>| {
+            let initial_lang = query.language.or(query.source_lang);
+            ws.on_upgrade(move |socket| async move {
+                let ws_handler = WebSocketHandler::new(model_path);
+                ws_handler.handle_websocket(socket, initial_lang).await;
+            })
+        });
+
+    // OpenAPI Spec JSON: GET /docs/openapi.json
+    let openapi = warp::path("docs")
         .and(warp::path("openapi.json"))
+        .and(warp::path::end())
         .and(warp::get())
         .map(|| {
             let openapi_spec = serde_json::json!({
                 "openapi": "3.0.0",
                 "info": {
-                    "title": "Canary STT API",
-                    "description": "Speech-to-Text API using Canary-RS model with real-time streaming support",
-                    "version": "1.0.0",
-                    "contact": {
-                        "name": "Canary STT Service"
-                    }
+                    "title": "Crane Nemotron Cache-Aware Streaming ASR API",
+                    "description": "Production-grade Speech-to-Text API specializing in Luganda ('lg') and English ('en'), using Crane Nemotron-3.5 0.6B FastConformer RNN-Transducer with Earshot Neural VAD (3,600x RTF).",
+                    "version": "1.2.0",
+                    "contact": { "name": "API Support" }
                 },
+                "servers": [
+                    { "url": "/", "description": "Local server" }
+                ],
                 "paths": {
-                    "/health": {
-                        "get": {
-                            "tags": ["Health"],
-                            "summary": "Health check",
-                            "description": "Check if the server is running and the model is loaded",
-                            "responses": {
-                                "200": {
-                                    "description": "Health check successful",
-                                    "content": {
-                                        "application/json": {
-                                            "schema": {
-                                                "$ref": "#/components/schemas/HealthResponse"
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    },
-                    "/v1/transcribe/canary": {
+                    "/v1/transcribe": {
                         "post": {
-                            "tags": ["Transcription"],
-                            "summary": "Transcribe audio",
-                            "description": "Transcribe audio data using the REST API",
+                            "summary": "Transcribe Audio (Single or Batch)",
+                            "description": "Synchronous STT (AssemblyAI style). Accepts raw 16-bit PCM/WAV binary or multipart/form-data. If 1 file is sent, returns a single transcript object. If multiple files are uploaded, returns a batch results object.",
                             "parameters": [
+                                {
+                                    "name": "language",
+                                    "in": "query",
+                                    "required": false,
+                                    "description": "Target language: 'lg' (Luganda), 'en' (English), or 'auto' (Auto-detect). 'sn' (Shona) is explicitly rejected.",
+                                    "schema": { "type": "string", "default": "auto" }
+                                },
                                 {
                                     "name": "sample_rate",
                                     "in": "query",
-                                    "description": "Audio sample rate",
                                     "required": false,
-                                    "schema": {
-                                        "type": "integer",
-                                        "default": 16000
-                                    }
-                                },
-                                {
-                                    "name": "source_lang",
-                                    "in": "query",
-                                    "description": "Source language",
-                                    "required": false,
-                                    "schema": {
-                                        "type": "string",
-                                        "default": "en"
-                                    }
-                                },
-                                {
-                                    "name": "target_lang",
-                                    "in": "query",
-                                    "description": "Target language",
-                                    "required": false,
-                                    "schema": {
-                                        "type": "string",
-                                        "default": "en"
-                                    }
+                                    "description": "Audio sample rate in Hz (default: 16000)",
+                                    "schema": { "type": "integer", "default": 16000 }
                                 }
                             ],
                             "requestBody": {
-                                "description": "Raw audio data in 16-bit PCM format",
+                                "description": "Raw audio binary (audio/wav, application/octet-stream) or multipart/form-data files",
                                 "required": true,
                                 "content": {
-                                    "application/octet-stream": {
+                                    "application/octet-stream": { "schema": { "type": "string", "format": "binary" } },
+                                    "audio/wav": { "schema": { "type": "string", "format": "binary" } },
+                                    "multipart/form-data": {
                                         "schema": {
-                                            "type": "string",
-                                            "format": "binary"
+                                            "type": "object",
+                                            "properties": {
+                                                "audio": { "type": "string", "format": "binary", "description": "Audio file" }
+                                            }
                                         }
                                     }
                                 }
@@ -468,236 +545,83 @@ pub async fn run_server(service: Arc<CanaryService>, port: u16) {
                                     "content": {
                                         "application/json": {
                                             "schema": {
-                                                "$ref": "#/components/schemas/TranscriptionResponse"
+                                                "oneOf": [
+                                                    { "$ref": "#/components/schemas/TranscriptionResponse" },
+                                                    { "$ref": "#/components/schemas/BatchTranscriptionResponse" }
+                                                ]
                                             }
                                         }
                                     }
                                 },
-                                "400": {
-                                    "description": "Invalid content type"
-                                },
-                                "500": {
-                                    "description": "Transcription failed"
-                                }
+                                "400": { "description": "Invalid audio or unsupported language (e.g. Shona)" },
+                                "500": { "description": "Internal server error" }
                             }
                         }
                     },
                     "/v1/transcribe/batch": {
                         "post": {
-                            "tags": ["Transcription"],
-                            "summary": "Upload and transcribe multiple audio files",
-                            "description": "Upload multiple audio files using multipart/form-data for batch transcription. Industry standard format used by AssemblyAI, Deepgram, and other voice APIs.",
+                            "summary": "Explicit Batch Transcription",
+                            "description": "Upload multiple audio files via multipart/form-data. Always returns BatchTranscriptionResponse array.",
                             "parameters": [
+                                {
+                                    "name": "language",
+                                    "in": "query",
+                                    "required": false,
+                                    "description": "Target language: 'lg', 'en', or 'auto'",
+                                    "schema": { "type": "string", "default": "auto" }
+                                }
+                            ],
+                            "responses": {
+                                "200": {
+                                    "description": "Batch transcription results",
+                                    "content": {
+                                        "application/json": {
+                                            "schema": { "$ref": "#/components/schemas/BatchTranscriptionResponse" }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    "/v1/realtime": {
+                        "get": {
+                            "summary": "Real-time Streaming WebSocket (AssemblyAI style)",
+                            "description": "Bidirectional WebSocket connection for live 560ms cache-aware streaming. Connect with query param e.g. ws://localhost:8080/v1/realtime?language=lg. Supported messages: 'audio' (base64 PCM), 'partial' (delta text), 'final' (completed utterance), 'speech_started', 'speech_ended', 'reset', 'flush'.",
+                            "parameters": [
+                                {
+                                    "name": "language",
+                                    "in": "query",
+                                    "required": false,
+                                    "description": "Target language: 'lg', 'en', or 'auto'",
+                                    "schema": { "type": "string", "default": "auto" }
+                                },
                                 {
                                     "name": "sample_rate",
                                     "in": "query",
-                                    "description": "Audio sample rate for all files",
                                     "required": false,
-                                    "schema": {
-                                        "type": "integer",
-                                        "default": 16000
-                                    }
-                                },
-                                {
-                                    "name": "source_lang",
-                                    "in": "query",
-                                    "description": "Source language for all files",
-                                    "required": false,
-                                    "schema": {
-                                        "type": "string",
-                                        "default": "en"
-                                    }
-                                },
-                                {
-                                    "name": "target_lang",
-                                    "in": "query",
-                                    "description": "Target language for all files",
-                                    "required": false,
-                                    "schema": {
-                                        "type": "string",
-                                        "default": "en"
-                                    }
+                                    "schema": { "type": "integer", "default": 16000 }
                                 }
-                            ],
-                            "requestBody": {
-                                "description": "Multiple audio files to transcribe using multipart/form-data",
-                                "required": true,
-                                "content": {
-                                    "multipart/form-data": {
-                                        "schema": {
-                                            "type": "object",
-                                            "properties": {
-                                                "files": {
-                                                    "type": "array",
-                                                    "items": {
-                                                        "type": "string",
-                                                        "format": "binary"
-                                                    },
-                                                    "description": "Audio files to transcribe"
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            },
-                            "responses": {
-                                "200": {
-                                    "description": "Batch transcription completed",
-                                    "content": {
-                                        "application/json": {
-                                            "schema": {
-                                                "$ref": "#/components/schemas/BatchTranscriptionResponse"
-                                            }
-                                        }
-                                    }
-                                },
-                                "400": {
-                                    "description": "Invalid request format"
-                                },
-                                "500": {
-                                    "description": "Batch transcription failed"
-                                }
-                            }
+                            ]
+                        }
+                    },
+                    "/health": {
+                        "get": {
+                            "summary": "Service Health Check",
+                            "description": "Returns model and VAD status, supported languages, chunk sizes.",
+                            "responses": { "200": { "description": "Healthy" } }
                         }
                     }
                 },
                 "components": {
                     "schemas": {
-                        "HealthResponse": {
-                            "type": "object",
-                            "properties": {
-                                "status": {
-                                    "type": "string",
-                                    "example": "healthy"
-                                },
-                                "model": {
-                                    "type": "string",
-                                    "example": "canary-rs"
-                                }
-                            }
-                        },
                         "TranscriptionResponse": {
                             "type": "object",
                             "properties": {
-                                "text": {
-                                    "type": "string",
-                                    "description": "Transcribed text",
-                                    "example": "Hello, world!"
-                                },
-                                "processing_time": {
-                                    "type": "number",
-                                    "format": "float",
-                                    "description": "Processing time in seconds",
-                                    "example": 1.23
-                                },
-                                "audio_duration": {
-                                    "type": "number",
-                                    "format": "float",
-                                    "description": "Audio duration in seconds",
-                                    "example": 2.5
-                                }
-                            }
-                        },
-                        "TranscriptionQuery": {
-                            "type": "object",
-                            "properties": {
-                                "sample_rate": {
-                                    "type": "integer",
-                                    "description": "Audio sample rate",
-                                    "example": 16000
-                                },
-                                "source_lang": {
-                                    "type": "string",
-                                    "description": "Source language",
-                                    "example": "en"
-                                },
-                                "target_lang": {
-                                    "type": "string",
-                                    "description": "Target language",
-                                    "example": "en"
-                                }
-                            }
-                        },
-                        "BatchAudioFile": {
-                            "type": "object",
-                            "required": ["name", "data"],
-                            "properties": {
-                                "name": {
-                                    "type": "string",
-                                    "description": "File name for identification",
-                                    "example": "audio1.wav"
-                                },
-                                "data": {
-                                    "type": "string",
-                                    "format": "binary",
-                                    "description": "Raw binary audio data (16-bit PCM, mono)",
-                                    "example": "Binary audio data..."
-                                },
-                                "sample_rate": {
-                                    "type": "integer",
-                                    "description": "Audio sample rate (optional, defaults to 16000)",
-                                    "example": 16000
-                                }
-                            }
-                        },
-                        "BatchTranscriptionRequest": {
-                            "type": "object",
-                            "required": ["files"],
-                            "properties": {
-                                "files": {
-                                    "type": "array",
-                                    "description": "Array of audio files to transcribe",
-                                    "items": {
-                                        "$ref": "#/components/schemas/BatchAudioFile"
-                                    }
-                                },
-                                "source_lang": {
-                                    "type": "string",
-                                    "description": "Source language for all files",
-                                    "example": "en"
-                                },
-                                "target_lang": {
-                                    "type": "string",
-                                    "description": "Target language for all files",
-                                    "example": "en"
-                                }
-                            }
-                        },
-                        "BatchTranscriptionResult": {
-                            "type": "object",
-                            "properties": {
-                                "name": {
-                                    "type": "string",
-                                    "description": "File name",
-                                    "example": "audio1.wav"
-                                },
-                                "text": {
-                                    "type": "string",
-                                    "description": "Transcribed text",
-                                    "example": "Hello, world!"
-                                },
-                                "processing_time": {
-                                    "type": "number",
-                                    "format": "float",
-                                    "description": "Processing time in seconds",
-                                    "example": 1.23
-                                },
-                                "audio_duration": {
-                                    "type": "number",
-                                    "format": "float",
-                                    "description": "Audio duration in seconds",
-                                    "example": 2.5
-                                },
-                                "success": {
-                                    "type": "boolean",
-                                    "description": "Whether transcription was successful",
-                                    "example": true
-                                },
-                                "error": {
-                                    "type": "string",
-                                    "description": "Error message if transcription failed",
-                                    "example": "Failed to decode audio"
-                                }
+                                "text": { "type": "string", "example": "Twasanyuse nnyo okukulaba." },
+                                "processing_time": { "type": "number", "example": 0.142 },
+                                "audio_duration": { "type": "number", "example": 2.80 },
+                                "real_time_factor": { "type": "number", "example": 0.051 },
+                                "language": { "type": "string", "example": "lg" }
                             }
                         },
                         "BatchTranscriptionResponse": {
@@ -705,145 +629,93 @@ pub async fn run_server(service: Arc<CanaryService>, port: u16) {
                             "properties": {
                                 "results": {
                                     "type": "array",
-                                    "description": "Array of transcription results",
                                     "items": {
-                                        "$ref": "#/components/schemas/BatchTranscriptionResult"
+                                        "type": "object",
+                                        "properties": {
+                                            "name": { "type": "string" },
+                                            "text": { "type": "string" },
+                                            "processing_time": { "type": "number" },
+                                            "audio_duration": { "type": "number" },
+                                            "real_time_factor": { "type": "number" },
+                                            "success": { "type": "boolean" },
+                                            "error": { "type": "string", "nullable": true }
+                                        }
                                     }
                                 },
-                                "total_processing_time": {
-                                    "type": "number",
-                                    "format": "float",
-                                    "description": "Total processing time for all files",
-                                    "example": 5.67
-                                },
-                                "total_files": {
-                                    "type": "integer",
-                                    "description": "Total number of files processed",
-                                    "example": 3
-                                },
-                                "successful_files": {
-                                    "type": "integer",
-                                    "description": "Number of successfully transcribed files",
-                                    "example": 2
-                                },
-                                "failed_files": {
-                                    "type": "integer",
-                                    "description": "Number of failed transcriptions",
-                                    "example": 1
-                                }
+                                "total_processing_time": { "type": "number" },
+                                "total_files": { "type": "integer" },
+                                "successful_files": { "type": "integer" },
+                                "failed_files": { "type": "integer" }
                             }
                         }
                     }
-                },
-                "tags": [
-                    {
-                        "name": "Health",
-                        "description": "Health check endpoints"
-                    },
-                    {
-                        "name": "Transcription",
-                        "description": "Audio transcription endpoints"
-                    }
-                ]
+                }
             });
             warp::reply::json(&openapi_spec)
         });
 
-    // Swagger UI endpoint
-    let swagger_ui = warp::path("swagger-ui")
-        .and(warp::path::end())
-        .and(warp::get())
-        .map(|| {
-            let html = r#"<!DOCTYPE html>
-<html lang="en">
+    let swagger_html = r#"<!DOCTYPE html>
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Canary STT API - Swagger UI</title>
-    <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@5.10.5/swagger-ui.css" />
+    <title>Crane Nemotron ASR API - Interactive Documentation</title>
+    <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@4.5.0/swagger-ui.css" />
     <style>
-        html {
-            box-sizing: border-box;
-            overflow: -moz-scrollbars-vertical;
-            overflow-y: scroll;
-        }
-        *, *:before, *:after {
-            box-sizing: inherit;
-        }
-        body {
-            margin:0;
-            background: #fafafa;
-        }
+        body { margin: 0; background: #fafafa; }
+        .topbar { display: none; }
     </style>
 </head>
 <body>
     <div id="swagger-ui"></div>
-    <script src="https://unpkg.com/swagger-ui-dist@5.10.5/swagger-ui-bundle.js"></script>
-    <script src="https://unpkg.com/swagger-ui-dist@5.10.5/swagger-ui-standalone-preset.js"></script>
+    <script src="https://unpkg.com/swagger-ui-dist@4.5.0/swagger-ui-bundle.js"></script>
     <script>
         window.onload = function() {
-            const ui = SwaggerUIBundle({
-                url: '/api-docs/openapi.json',
+            SwaggerUIBundle({
+                url: '/docs/openapi.json',
                 dom_id: '#swagger-ui',
-                deepLinking: true,
-                presets: [
-                    SwaggerUIBundle.presets.apis,
-                    SwaggerUIStandalonePreset
-                ],
-                plugins: [
-                    SwaggerUIBundle.plugins.DownloadUrl
-                ],
-                layout: "StandaloneLayout",
-                tryItOutEnabled: true
+                presets: [SwaggerUIBundle.presets.apis],
+                layout: 'BaseLayout'
             });
         };
     </script>
 </body>
 </html>"#;
-            warp::reply::html(html)
-        });
 
-    // WebSocket endpoint
-    let ws_service = service.clone();
-    let websocket = warp::path("ws")
-        .and(warp::ws())
-        .and(warp::any().map(move || ws_service.clone()))
-        .map(|ws: Ws, service: Arc<CanaryService>| {
-            ws.on_upgrade(move |websocket| async move {
-                // Create WebSocket handler
-                let model = service.model.clone();
-                let ws_handler = crate::websocket::WebSocketHandler::new(model);
-                ws_handler.handle_websocket(websocket).await;
-            })
-        });
+    // Interactive Swagger UI: GET /docs
+    let docs = warp::path("docs")
+        .and(warp::path::end())
+        .and(warp::get())
+        .map(move || warp::reply::html(swagger_html));
+
+    // Interactive Demo UI (at root /)
+    let demo_ui = warp::path::end().and(warp::get()).map(|| {
+        let html = include_str!("../static/index.html");
+        warp::reply::html(html)
+    });
 
     let routes = health
-        .or(websocket)
-        .or(transcribe)
+        .or(demo_ui)
+        .or(realtime_ws)
+        .or(transcribe_v1)
         .or(batch_transcribe)
         .or(openapi)
-        .or(swagger_ui)
+        .or(docs)
         .with(cors)
         .with(warp::log("api"));
 
-    println!("Canary STT Server starting on http://0.0.0.0:{}", port);
-    println!("Available endpoints:");
-    println!("  GET  /health - Health check");
-    println!("  GET  /swagger-ui/ - Interactive API documentation (Swagger UI)");
-    println!("  GET  /api-docs/openapi.json - OpenAPI specification");
-    println!("  WS   /ws - WebSocket streaming transcription");
-    println!("  POST /v1/transcribe/canary?sample_rate=16000 - Transcribe single audio");
-    println!("  POST /v1/transcribe/batch?sample_rate=16000 - Upload multiple audio files");
-    println!();
-    println!("REST API Usage:");
-    println!("  Content-Type: application/octet-stream");
-    println!("  Body: Raw audio data (16-bit PCM, mono)");
-    println!("  Query: ?sample_rate=16000&source_lang=en&target_lang=en");
-    println!();
-    println!("WebSocket Usage:");
-    println!("  Connect: ws://localhost:{}/ws", port);
-    println!("  Send config: {{\"type\":\"config\",\"sample_rate\":16000,\"source_lang\":\"en\",\"target_lang\":\"en\"}}");
-    println!("  Send audio: {{\"type\":\"audio\",\"data\":\"<base64_audio>\",\"sample_rate\":16000}}");
+    println!("============================================================");
+    println!(" Crane Nemotron 3.5 Streaming ASR Service running on port {port}");
+    println!(" Engine: parakeet-rs | VAD: Earshot (pyke.io, 3,600x RTF)");
+    println!(" Languages: Luganda ('lg'), English ('en'), Auto ('auto')");
+    println!(" Shona ('sn'): EXCLUDED / DISABLED");
+    println!("------------------------------------------------------------");
+    println!(" [WebSocket Streaming]  ws://localhost:{port}/v1/realtime");
+    println!(" [Single Transcribe]    POST http://localhost:{port}/v1/transcribe");
+    println!(" [Batch Transcribe]     POST http://localhost:{port}/v1/transcribe/batch");
+    println!(" [Health Check]         GET http://localhost:{port}/health");
+    println!(" [Interactive Docs]     http://localhost:{port}/docs");
+    println!(" [OpenAPI Spec JSON]    http://localhost:{port}/docs/openapi.json");
+    println!(" [Demo Web Interface]   http://localhost:{port}/");
+    println!("============================================================");
 
     warp::serve(routes).run(([0, 0, 0, 0], port)).await;
 }
@@ -851,6 +723,7 @@ pub async fn run_server(service: Arc<CanaryService>, port: u16) {
 #[derive(Debug)]
 pub enum ApiError {
     InvalidContentType,
+    LanguageError(String),
     TranscriptionFailed(String),
 }
 
@@ -861,11 +734,12 @@ impl warp::Reply for ApiError {
         let (code, message) = match self {
             ApiError::InvalidContentType => (
                 warp::http::StatusCode::BAD_REQUEST,
-                "Invalid content type. Expected application/octet-stream".to_string(),
+                "Invalid content type. Expected application/octet-stream, audio/wav, or multipart/form-data".to_string(),
             ),
+            ApiError::LanguageError(msg) => (warp::http::StatusCode::BAD_REQUEST, msg),
             ApiError::TranscriptionFailed(msg) => (
                 warp::http::StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Transcription failed: {}", msg),
+                format!("Transcription failed: {msg}"),
             ),
         };
 

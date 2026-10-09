@@ -1,22 +1,23 @@
 version: '3.8'
 
 services:
-  canary-stt:
+  crane-nemotron-stt:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: canary-stt-service
+    container_name: crane-nemotron-stt-service
     ports:
       - "8080:8080"
     volumes:
-      # Mount model directory (if you want to use external model)
-      - ./canary-180m-flash-int8:/app/canary-180m-flash-int8:ro
-      # Mount audio files for testing
+      # Model is baked directly into the image at /app/crane-nemo-asr-1.1-onnx!
+      # Optional: Uncomment below only if you wish to override with external host weights:
+      # - ./crane-nemo-asr-1.1-onnx:/app/crane-nemo-asr-1.1-onnx:ro
       - ./audio:/app/audio:ro
     environment:
       - RUST_LOG=info
-      - MODEL_PATH=/app/canary-180m-flash-int8
-    # GPU support (requires nvidia-docker2)
+      - MODEL_PATH=/app/crane-nemo-asr-1.1-onnx
+      - PORT=8080
+    # GPU support (requires NVIDIA Container Toolkit)
     deploy:
       resources:
         reservations:
@@ -30,20 +31,22 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 5s
+      start_period: 10s
 
-  # Alternative CPU-only version (comment out the above and use this if no GPU)
-  # canary-stt-cpu:
+  # CPU-only alternative (uncomment if running without NVIDIA GPU)
+  # crane-nemotron-stt-cpu:
   #   build:
   #     context: .
   #     dockerfile: Dockerfile.cpu
-  #   container_name: canary-stt-service-cpu
+  #   container_name: crane-nemotron-stt-service-cpu
   #   ports:
   #     - "8080:8080"
   #   volumes:
-  #     - ./canary-180m-flash-int8:/app/canary-180m-flash-int8:ro
+  #     # Model is baked into image. Uncomment only to override with external host weights:
+  #     # - ./crane-nemo-asr-1.1-onnx:/app/crane-nemo-asr-1.1-onnx:ro
   #     - ./audio:/app/audio:ro
   #   environment:
   #     - RUST_LOG=info
-  #     - MODEL_PATH=/app/canary-180m-flash-int8
+  #     - MODEL_PATH=/app/crane-nemo-asr-1.1-onnx
+  #     - PORT=8080
   #   restart: unless-stopped

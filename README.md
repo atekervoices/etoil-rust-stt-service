@@ -1,506 +1,342 @@
-# Canary STT Service
+# Crane Nemotron 3.5 Cache-Aware Streaming ASR Service
 
-A high-performance Speech-to-Text service built with Rust, featuring industry-standard endpoints, GPU acceleration, and real-time streaming capabilities.
+A high-performance, real-time Speech-to-Text (ASR) service built in Rust using **parakeet-rs** and **NVIDIA Nemotron-3.5 0.6B FastConformer RNN-Transducer**, fine-tuned for **Luganda** and **English** by **Crane AI Labs** ([CraneAILabs/crane-nemo-asr-1.1](https://huggingface.co/CraneAILabs/crane-nemo-asr-1.1)).
 
-## Features
+---
 
-- 🚀 **High Performance** - GPU acceleration with automatic detection (CUDA/RTX support)
-- 🎯 **Multiple Endpoints** - Single file, multipart batch, and WebSocket streaming
-- 🔄 **Concurrent Processing** - Parallel batch transcription for high throughput
-- 🌐 **Industry Standard** - Multipart batch upload like AssemblyAI/Deepgram
-- 📡 **Real-time Streaming** - WebSocket endpoint for live transcription
-- 🐳 **Docker Ready** - Containerized deployment with GPU support
-- 🧪 **Comprehensive Testing** - Benchmark scripts and test utilities
+## Key Features
 
-## Table of Contents
+- **Cache-Aware Stateful Streaming** — Real-time speech-to-text with rolling encoder cache and decoder states across 560ms chunks (8,960 samples @ 16kHz).
+- **Language Specialization**:
+  - **Luganda (`lg`)**: High-accuracy Luganda ASR (WER 20.9%, CER 5.1%, Gemini 4.95/5 intelligibility), using automatic prompt conditioning.
+  - **English (`en`)**: Clean English transcription with punctuation and capitalization preserved.
+  - **Auto-Detect (`auto`)**: Automatic language identification.
+-    **Multi-Interface Support**:
+  - **WebSocket (`/v1/realtime`)**: Ultra-low latency bidirectional real-time audio streaming
+  - **REST API (`/v1/transcribe`)**: Single audio file transcription.
+  - **Batch Multipart (`/v1/transcribe/batch`)**: High-throughput multi-file batch processing.
+  - **Interactive Documentation (`/docs` & `/docs/openapi.json`)**: Built-in Swagger UI and OpenAPI 3.0 specification.
+  - **Interactive Web Demo (`/`)**: Dark-mode browser tester with live microphone streaming visualizer.
+  - **CLI Tools**: `live` (direct microphone transcription) and `file_transcribe` (audio file batch tool).
+- **Hardware Acceleration** — Runs on CPU (fast real-time factor) or NVIDIA GPU via CUDA with ONNX Runtime.
+- **Docker & Compose Ready** — Multi-stage builds for both GPU (CUDA 12.6) and lightweight CPU execution.
 
-- [Installation](#installation)
-- [Quick Start](#quick-start)
-- [API Endpoints](#api-endpoints)
-- [GPU Support](#gpu-support)
-- [Docker Deployment](#docker-deployment)
-- [Testing](#testing)
-- [Benchmarking](#benchmarking)
-- [Configuration](#configuration)
-- [Troubleshooting](#troubleshooting)
+---
 
-## Installation
+## Architecture & Streaming Principles
 
-### Prerequisites
+Nemotron-3.5 0.6B Streaming uses a **FastConformer RNN-Transducer** with cache-aware streaming:
 
-- **Rust** 1.80 or later
-- **NVIDIA GPU** (optional, for GPU acceleration)
-- **CUDA Toolkit** (optional, for GPU support)
-- **Docker** (optional, for containerized deployment)
-
-### Local Installation
-
-```bash
-# Clone the repository
-git clone <repository-url>
-cd etoil-rust-stt-service
-
-# Build the project
-cargo build --release
-
-# Run the API server
-cargo run --bin api_server
+```
+Audio Input (16kHz Mono)
+       │
+       ▼
+Chunking Buffer (560ms / 8960 samples)
+       │
+       ├──► VAD (Energy/Silence Detection & Utterance Turn Tracking)
+       │
+       ▼
+Nemotron Cache-Aware Step
+  ├── Encoder Cache (att_context_size: [56, 6] or [56, 13])
+  ├── Language Conditioning (Prompt Index: 'auto' for Luganda, 'en-US' for English)
+  └── Decoder Joint Network (Predictor & Joint Emission)
+       │
+       ▼
+Token Stream -> Normalized Transcript Deltas
 ```
 
-### Model Download
+- **Audio Rate**: 16,000 Hz (16-bit PCM mono or 32-bit float).
+- **Chunk Size**: `8960` samples (560 ms).
+- **State Reset**: Calling `model.reset()` flushes encoder and decoder caches cleanly between distinct utterances.
 
-The service uses the NVIDIA Canary 180M Flash ONNX model (int8 quantized). The model directory is excluded from git due to its large size.
+---
 
-**Download the model using onnx-asr:**
+## Language Support Matrix
+
+| Language | Code | Prompt Mapping | Status |
+| :--- | :--- | :--- | :--- |
+| **Luganda** | `lg`, `lug`, `luganda` | `auto` (Index 101) | ✅ Fully Supported (Crane AI fine-tuned) |
+| **English** | `en`, `eng`, `en-US` | `en-US` (Index 0) | ✅ Fully Supported |
+| **Auto-Detect** | `auto` | `auto` (Index 101) | ✅ Fully Supported |
+| **Shona** | `sn`, `shona` | N/A | ❌ **Excluded / Disabled** |
+
+> **Note on Luganda Prompting**: As detailed in Crane AI Labs' model card:
+> *"Best results use the language-ID prompt set to auto-detect; Luganda and Shona do not have a dedicated prompt slot, so auto-detect is recommended for them."*
+> This service automatically routes Luganda requests to the optimal `auto` prompt slot. Requests requesting Shona (`sn`) will be rejected with an informative error message.
+
+---
+
+## Model Setup & ONNX Export
+
+The service requires the ONNX-exported weights of `CraneAILabs/crane-nemo-asr-1.1`.
+
+### 1. Download the Pre-trained `.nemo` Model
+
 ```bash
-# Install onnx-asr
-pip install onnx-asr[cpu,hub]
-
-# Download the model (this will download to current directory)
-python -c "import onnx_asr; model = onnx_asr.load_model('istupakov/canary-180m-flash-onnx')"
-
-# The model will be downloaded to ~/.cache/onnx_asr/
-# Copy it to your project directory
-cp -r ~/.cache/onnx_asr/istupakov_canary-180m-flash-onnx ./canary-180m-flash-int8
+# Using Python helper script:
+python scripts/download_model.py --output-dir ./models
 ```
 
-**Alternative: Download directly from Hugging Face:**
+Or download directly via Hugging Face Hub:
 ```bash
-# Install huggingface-cli
-pip install huggingface_hub
-
-# Download the model files
-huggingface-cli download istupakov/canary-180m-flash-onnx --local-dir ./canary-180m-flash-int8
+huggingface-cli download CraneAILabs/crane-nemo-asr-1.1 crane-nemo-asr-1.1.nemo --local-dir ./models
 ```
 
-**Verify model installation:**
+### 2. Export to ONNX for `parakeet-rs`
+
+Export the `.nemo` weights to the ONNX directory structure:
+
 ```bash
-# The model should be in the canary-180m-flash-int8 directory
-ls canary-180m-flash-int8
-# Expected files: model.onnx, config.json, tokenizer.json, etc.
+# Install export dependencies
+pip install "git+https://github.com/NVIDIA/NeMo.git@main#egg=nemo_toolkit[asr]"
+pip install "numpy<2.0" onnx onnxruntime soundfile sentencepiece torch
+
+# Run the export script
+python scripts/export_crane_nemotron.py ./models/crane-nemo-asr-1.1.nemo ./crane-nemo-asr-1.1-onnx
 ```
 
-**Note:** The model directory is excluded from git via `.gitignore` to keep the repository size manageable. Users must download the model separately after cloning the repository.
+Expected files in `./crane-nemo-asr-1.1-onnx`:
+- `encoder.onnx`
+- `encoder.onnx.data` (external tensor weights)
+- `decoder_joint.onnx`
+- `tokenizer.model` (SentencePiece vocab)
+- `config.json`
 
-**Model Details:**
-- **Source:** NVIDIA Canary 180M Flash converted to ONNX format
-- **Size:** ~180M parameters (int8 quantized)
-- **Languages:** English, German, Spanish, French
-- **License:** CC-BY-4.0
+---
 
-## Quick Start
+## Running the Service
 
-### Start the Server
+### 1. Start the API Server
 
 ```bash
-cargo run --bin api_server
+# Using default model directory (crane-nemo-asr-1.1-onnx) on port 8080:
+cargo run --release --bin api_server
+
+# Or with custom model path / port:
+MODEL_PATH=./crane-nemo-asr-1.1-onnx PORT=8080 cargo run --release --bin api_server
 ```
 
-The server will start on `http://localhost:8080`
+Once started:
+- **Interactive Web Demo**: [http://localhost:8080/](http://localhost:8080/)
+- **Interactive Documentation**: [http://localhost:8080/docs](http://localhost:8080/docs)
+- **OpenAPI 3.0 JSON Spec**: [http://localhost:8080/docs/openapi.json](http://localhost:8080/docs/openapi.json)
+- **Health Check**: [http://localhost:8080/health](http://localhost:8080/health)
+- **Live Streaming WebSocket**: `ws://localhost:8080/v1/realtime`
 
-### Test the Service
+---
+
+### 2. Live Microphone Streaming (CLI)
+
+Test live microphone streaming in real-time right from your terminal:
 
 ```bash
-# Health check
-curl http://localhost:8080/health
+# Live microphone transcription in Luganda:
+cargo run --release --bin live lg ./crane-nemo-asr-1.1-onnx
 
-# Single file transcription
-curl -X POST \
-  http://localhost:8080/v1/transcribe/canary?sample_rate=16000 \
+# Live microphone transcription in English:
+cargo run --release --bin live en ./crane-nemo-asr-1.1-onnx
+
+# Auto-detect language:
+cargo run --release --bin live auto ./crane-nemo-asr-1.1-onnx
+```
+
+---
+
+### 3. Audio File Transcription (CLI)
+
+Transcribe a WAV file chunk-by-chunk using cache-aware streaming:
+
+```bash
+# Transcribe WAV file in Luganda:
+cargo run --release --bin file_transcribe -- test_luganda.wav lg ./crane-nemo-asr-1.1-onnx
+
+# Transcribe WAV file in English:
+cargo run --release --bin file_transcribe -- sample.wav en ./crane-nemo-asr-1.1-onnx
+```
+
+---
+
+## API Reference (Standardized v1 Endpoints)
+
+### 1. Synchronous Audio Transcription
+```http
+POST /v1/transcribe?language=lg
+Content-Type: application/octet-stream | audio/wav | multipart/form-data
+```
+
+#### A. Single File Upload (Raw Audio or 1-file Multipart)
+```bash
+# Via raw binary:
+curl -X POST "http://localhost:8080/v1/transcribe?language=lg" \
   -H "Content-Type: application/octet-stream" \
-  --data-binary @test-audio.wav
+  --data-binary @luganda_audio.wav
+
+# Or via AssemblyAI-style multipart upload:
+curl -X POST "http://localhost:8080/v1/transcribe?language=lg" \
+  -F "audio=@luganda_audio.wav"
 ```
-
-## API Endpoints
-
-### Health Check
-
-```http
-GET /health
-```
-
-Response:
+**Response**:
 ```json
 {
-  "status": "healthy",
-  "model_loaded": true,
-  "gpu_enabled": true
+  "text": "Twasanyuse nnyo okukulaba.",
+  "processing_time": 0.145,
+  "audio_duration": 2.80,
+  "real_time_factor": 0.051,
+  "language": "lg"
 }
 ```
 
-### Single File Transcription
-
-```http
-POST /v1/transcribe/canary?sample_rate=16000&source_lang=en&target_lang=en
-Content-Type: application/octet-stream
+#### B. Multi-File Batch Transcription
+Uploading 2 or more files to `POST /v1/transcribe` (or to explicit `POST /v1/transcribe/batch`):
+```bash
+curl -X POST "http://localhost:8080/v1/transcribe?language=en" \
+  -F "file1=@clip1.wav" \
+  -F "file2=@clip2.wav"
 ```
-
-**Parameters:**
-- `sample_rate` - Audio sample rate (default: 16000)
-- `source_lang` - Source language code (default: "en")
-- `target_lang` - Target language code (default: "en")
-
-**Request Body:** Raw PCM audio data (16-bit, little-endian)
-
-**Response:**
-```json
-{
-  "text": "Transcription result here",
-  "processing_time": 1.234
-}
-```
-
-### Batch Transcription (Industry Standard)
-
-```http
-POST /v1/transcribe/batch?sample_rate=16000&source_lang=en&target_lang=en
-Content-Type: multipart/form-data
-```
-
-**Parameters:**
-- `sample_rate` - Audio sample rate (default: 16000)
-- `source_lang` - Source language code (default: "en")
-- `target_lang` - Target language code (default: "en")
-
-**Request Body:** Multipart form data with `files` field containing multiple audio files
-
-**Response:**
+**Response**:
 ```json
 {
   "results": [
     {
-      "name": "audio1.wav",
-      "text": "Transcription result",
-      "processing_time": 1.234,
-      "audio_duration": 5.5,
+      "name": "clip1.wav",
+      "text": "Welcome to the real-time speech service.",
+      "processing_time": 0.12,
+      "audio_duration": 2.50,
+      "real_time_factor": 0.048,
+      "success": true,
+      "error": null
+    },
+    {
+      "name": "clip2.wav",
+      "text": "Processing speech with high accuracy.",
+      "processing_time": 0.14,
+      "audio_duration": 3.00,
+      "real_time_factor": 0.046,
       "success": true,
       "error": null
     }
   ],
-  "total_processing_time": 1.234,
-  "total_files": 1,
-  "successful_files": 1,
+  "total_processing_time": 0.26,
+  "total_files": 2,
+  "successful_files": 2,
   "failed_files": 0
 }
 ```
 
-### WebSocket Streaming
+---
 
-```javascript
-const ws = new WebSocket('ws://localhost:8080/ws');
+### 2. Real-Time Streaming WebSocket (`/v1/realtime`)
 
-// Send configuration
-ws.send(JSON.stringify({
-  type: 'config',
-  sample_rate: 16000,
-  source_lang: 'en',
-  target_lang: 'en'
-}));
+Connect to `ws://localhost:8080/v1/realtime`.
 
-// Send audio data (base64 encoded)
-ws.send(JSON.stringify({
-  type: 'audio',
-  data: 'base64_encoded_audio',
-  sample_rate: 16000
-}));
-
-// Receive partial results
-ws.onmessage = (event) => {
-  const message = JSON.parse(event.data);
-  if (message.type === 'partial') {
-    console.log('Partial:', message.text);
-  } else if (message.type === 'final') {
-    console.log('Final:', message.text);
-  }
-};
+#### Connection Handshake with Query Parameters
+Connect directly with target language:
+```text
+ws://localhost:8080/v1/realtime?language=lg&sample_rate=16000
 ```
 
-## GPU Support
+#### In-Band Configuration (Optional)
+```json
+{
+  "type": "config",
+  "language": "lg",
+  "sample_rate": 16000
+}
+```
 
-The service automatically detects and uses GPU acceleration when available.
+#### Stream Audio (Client -> Server)
+Send base64-encoded 16-bit PCM chunks (16kHz mono):
+```json
+{
+  "type": "audio",
+  "data": "<BASE64_PCM16_BYTES>",
+  "sample_rate": 16000
+}
+```
 
-### Supported GPUs
+#### Streaming Responses (Server -> Client)
+```json
+// Partial token emission (each 560ms chunk):
+{
+  "type": "partial",
+  "text": "Twasanyuse",
+  "accumulated_text": "Twasanyuse",
+  "confidence": 0.92,
+  "timestamp": 0.56
+}
 
-- **NVIDIA GPUs** (tested with RTX 2060)
-- **CUDA 12.1** or later
-- **TensorRT** (optional, for optimized inference)
+// Final completed utterance (on Earshot VAD silence hangover ~288ms):
+{
+  "type": "final",
+  "text": "Twasanyuse nnyo okukulaba.",
+  "confidence": 0.95,
+  "timestamp": 2.80,
+  "processing_time": 2.80
+}
+```
 
-### GPU Detection
+---
 
-The service will automatically:
-1. Try to initialize CUDA GPU
-2. Fall back to CPU if GPU is unavailable
-3. Log the detected execution provider
+### 3. Interactive Documentation & OpenAPI
 
-**Console Output:**
-- `✅ Using CUDA GPU acceleration` - GPU detected and in use
-- `⚠️ CUDA not available, falling back to CPU` - CPU fallback
+- **Interactive Swagger UI**: [http://localhost:8080/docs](http://localhost:8080/docs)
+- **OpenAPI 3.0 JSON Specification**: [http://localhost:8080/docs/openapi.json](http://localhost:8080/docs/openapi.json)
+- **Interactive Web Demo UI**: [http://localhost:8080/](http://localhost:8080/)
+- **Health Check**: [http://localhost:8080/health](http://localhost:8080/health)
 
-### GPU Requirements
+#### WebSocket Control Messages
+- **Flush**: `{ "type": "flush" }` — Pads remaining audio buffer and outputs final transcript.
+- **Reset**: `{ "type": "reset" }` — Flushes Nemotron streaming cache between turns.
 
-- **NVIDIA Drivers** - Latest drivers for your GPU
-- **CUDA Toolkit** - Version 12.1 or later
-- **Docker GPU Support** - nvidia-docker2 for containerized deployment
-
-### Performance Comparison
-
-| Configuration | Latency | Throughput | Speedup |
-|--------------|---------|------------|---------|
-| CPU (i7)     | ~3-4s   | 0.3 req/s  | 1x      |
-| GPU (RTX 2060) | ~100-500ms | 10-50 req/s | 10-50x  |
+---
 
 ## Docker Deployment
 
-### Quick Start with Docker Compose
+### Run with Docker Compose
 
 ```bash
-# Build and start the service
-docker-compose up -d
+# Start GPU service
+docker compose up -d
 
-# View logs
-docker-compose logs -f
-
-# Stop the service
-docker-compose down
+# Check service logs
+docker compose logs -f
 ```
 
-### Manual Docker Build
+### Build Docker Image Manually
 
 ```bash
-# Build GPU version
-docker build -t canary-stt:latest .
+# Build CUDA GPU container:
+docker build -t crane-nemotron-stt -f Dockerfile .
 
-# Build CPU-only version
-docker build -f Dockerfile.cpu -t canary-stt:cpu .
+# Build CPU-only container:
+docker build -t crane-nemotron-stt-cpu -f Dockerfile.cpu .
 
-# Run with GPU support
-docker run -d \
-  --name canary-stt \
-  --gpus all \
-  -p 8080:8080 \
-  -v $(pwd)/canary-180m-flash-int8:/app/canary-180m-flash-int8:ro \
-  canary-stt:latest
+# Run with GPU (Self-contained, no host volume required):
+docker run --gpus all -p 8080:8080 crane-nemotron-stt
+
+# Or run with CPU:
+docker run -p 8080:8080 crane-nemotron-stt-cpu
 ```
 
-For detailed Docker deployment instructions, see [DOCKER.md](DOCKER.md).
+---
 
-## Testing
+## Verification & Testing
 
-### Run Tests
-
+Verify that language validation rejects Shona (`sn`):
 ```bash
-# Run all tests
-cargo test
-
-# Run specific test
-cargo test test_name
+curl -X POST "http://localhost:8080/v1/transcribe?language=sn" \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @test.wav
+```
+Response:
+```json
+{
+  "error": "Language 'shona' (sn) is explicitly disabled in this service configuration."
+}
 ```
 
-### Test HTML Interface
-
-Open `test.html` in your browser to test all endpoints through a web interface.
-
-### WebSocket Test
-
-```bash
-python test_websocket.py
-```
-
-## Benchmarking
-
-### Run Benchmark Script
-
-```bash
-# Install dependencies
-pip install requests websocket-client
-
-# Benchmark single file endpoint
-python benchmark.py canary 8 3 test-audio.wav
-
-# Benchmark batch endpoint
-python benchmark.py batch 8 3 test-audio.wav
-
-# Benchmark WebSocket endpoint
-python benchmark.py websocket 2 1 test-audio.wav
-```
-
-**Parameters:**
-- `endpoint` - canary, batch, or websocket
-- `num_requests` - Number of concurrent requests
-- `num_rounds` - Number of test rounds
-- `audio_file` - Path to test audio file
-
-### Benchmark Output
-
-The benchmark provides:
-- **Sequential vs Concurrent** performance comparison
-- **Latency metrics** - min, avg, max, p50, p95
-- **Throughput** - requests per second
-- **Speedup** - Concurrent vs sequential improvement
-- **Accuracy verification** - Ensures consistent results
-
-## Configuration
-
-### Environment Variables
-
-- `RUST_LOG` - Log level (default: `info`)
-- `MODEL_PATH` - Path to model directory (default: `./canary-180m-flash-int8`)
-- `SERVER_PORT` - Server port (default: `8080`)
-
-### Server Configuration
-
-Edit `src/api_server.rs` to customize:
-- Port number
-- CORS settings
-- Request size limits
-- Timeout settings
-
-## API Documentation
-
-### OpenAPI Specification
-
-Open `swagger.html` in your browser to view the interactive API documentation.
-
-### OpenAPI JSON
-
-The OpenAPI specification is available at:
-```
-http://localhost:8080/openapi.json
-```
-
-## Troubleshooting
-
-### GPU Not Detected
-
-**Problem:** Service falls back to CPU despite having NVIDIA GPU
-
-**Solutions:**
-1. Check NVIDIA drivers: `nvidia-smi`
-2. Verify CUDA installation
-3. Ensure canary-rs has GPU support enabled
-4. Check Docker GPU support (if using Docker)
-
-### Model Loading Errors
-
-**Problem:** "Failed to load model" errors
-
-**Solutions:**
-1. Verify model directory exists: `ls canary-180m-flash-int8`
-2. Check file permissions
-3. Ensure sufficient disk space
-4. Verify model integrity
-
-### Build Errors
-
-**Problem:** Rust compilation errors
-
-**Solutions:**
-1. Update Rust: `rustup update`
-2. Clean build: `cargo clean`
-3. Check dependencies: `cargo check`
-4. Verify Rust version compatibility
-
-### Docker Build Errors
-
-**Problem:** Docker build fails
-
-**Solutions:**
-1. Check Docker version: `docker --version`
-2. Clean Docker cache: `docker system prune -a`
-3. Verify network connectivity
-4. Check Docker disk space
-
-### WebSocket Connection Issues
-
-**Problem:** WebSocket connection fails
-
-**Solutions:**
-1. Check server is running
-2. Verify WebSocket endpoint URL
-3. Check firewall settings
-4. Test with WebSocket client tools
-
-## Performance Optimization
-
-### GPU Optimization
-
-1. **Use TensorRT** - Further optimize inference speed
-2. **Batch Processing** - Process multiple files concurrently
-3. **Memory Management** - Adjust GPU memory allocation
-
-### CPU Optimization
-
-1. **Increase Threads** - Adjust thread pool size
-2. **Use Smaller Models** - Trade accuracy for speed
-3. **Optimize Audio** - Pre-process audio files
-
-### Network Optimization
-
-1. **Enable Compression** - Use gzip for responses
-2. **Keep-Alive Connections** - Reduce connection overhead
-3. **Load Balancing** - Distribute requests across instances
-
-## Production Deployment
-
-### Security Considerations
-
-1. **Authentication** - Add API key authentication
-2. **HTTPS/TLS** - Encrypt all communications
-3. **Rate Limiting** - Prevent abuse
-4. **Input Validation** - Sanitize all inputs
-5. **Network Isolation** - Use private networks
-
-### Monitoring
-
-1. **Health Checks** - Implement comprehensive health monitoring
-2. **Logging** - Centralized log aggregation
-3. **Metrics** - Track performance metrics
-4. **Alerting** - Set up alerting for failures
-
-### Scaling
-
-1. **Horizontal Scaling** - Deploy multiple instances
-2. **Load Balancing** - Use a load balancer
-3. **Auto-scaling** - Scale based on demand
-4. **GPU Clustering** - Distribute GPU workloads
-
-## Contributing
-
-Contributions are welcome! Please follow these guidelines:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
+---
 
 ## License
 
-[Specify your license here]
-
-## Support
-
-For issues and questions:
-- **Documentation** - Check this README and DOCKER.md
-- **Issues** - Open an issue on GitHub
-- **Discussions** - Use GitHub Discussions for questions
-
-## Acknowledgments
-
-- **canary-rs** - Speech-to-Text library
-- **Warp** - Web framework for Rust
-- **ONNX Runtime** - Machine learning inference engine
-- **NVIDIA** - GPU acceleration technology
-
-## Roadmap
-
-- [ ] Add more language support
-- [ ] Implement speaker diarization
-- [ ] Add word-level timestamps
-- [ ] Improve WebSocket streaming
-- [ ] Add batch job scheduling
-- [ ] Implement caching layer
-- [ ] Add authentication/authorization
-- [ ] Improve error handling
-- [ ] Add monitoring dashboard
-- [ ] Support more audio formats
+Inherits the [NVIDIA Open Model License](https://developer.nvidia.com/downloads/license/nvidia-open-model-license-agreement) from the base Nemotron-3.5 model.

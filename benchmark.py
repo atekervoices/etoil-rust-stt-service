@@ -40,11 +40,11 @@ def load_wav_as_raw_pcm(wav_file_path):
 def send_single_request(server_url, raw_pcm_data, sample_rate, request_id=0):
     """Send one single file transcription request."""
     headers = {"Content-Type": "application/octet-stream"}
-    params = {"sample_rate": sample_rate, "source_lang": "en", "target_lang": "en"}
+    params = {"sample_rate": sample_rate, "language": "auto"}
 
     start = time.perf_counter()
     response = requests.post(
-        f"{server_url}/v1/transcribe/canary",
+        f"{server_url}/v1/transcribe",
         data=raw_pcm_data,
         headers=headers,
         params=params,
@@ -102,7 +102,7 @@ def send_batch_request(server_url, raw_pcm_data, sample_rate, request_id=0):
 
 def send_websocket_request(server_url, raw_pcm_data, sample_rate, request_id=0):
     """Send one WebSocket transcription request."""
-    ws_url = server_url.replace('http://', 'ws://').replace('https://', 'wss://') + '/ws'
+    ws_url = server_url.replace('http://', 'ws://').replace('https://', 'wss://') + '/v1/realtime'
     
     result = {
         "request_id": request_id,
@@ -221,7 +221,7 @@ def warmup(server_url, endpoint, raw_pcm_data, sample_rate):
     """Single warmup request so first-run JIT / CUDA overhead is excluded."""
     print(f"  Warmup request to {endpoint} ...")
     
-    if endpoint == "canary":
+    if endpoint in ("transcribe", "single"):
         r = send_single_request(server_url, raw_pcm_data, sample_rate)
     elif endpoint == "batch":
         r = send_batch_request(server_url, raw_pcm_data, sample_rate)
@@ -242,7 +242,7 @@ def run_sequential(server_url, endpoint, raw_pcm_data, sample_rate, n):
     """Send *n* requests one-by-one."""
     results = []
     for i in range(n):
-        if endpoint == "canary":
+        if endpoint in ("transcribe", "single"):
             results.append(send_single_request(server_url, raw_pcm_data, sample_rate, request_id=i))
         elif endpoint == "batch":
             results.append(send_batch_request(server_url, raw_pcm_data, sample_rate, request_id=i))
@@ -258,7 +258,7 @@ def run_concurrent(server_url, endpoint, raw_pcm_data, sample_rate, n):
     results = [None] * n
     
     # Choose the right function based on endpoint
-    if endpoint == "canary":
+    if endpoint in ("transcribe", "single"):
         func = send_single_request
     elif endpoint == "batch":
         func = send_batch_request
@@ -484,7 +484,7 @@ def run_batch_comparison(server_url, audio_file, endpoint, num_requests, num_rou
 def main():
     server_url = "http://localhost:8080"
     audio_file = "test_audio.wav"
-    endpoint = "canary"  # canary, batch, or websocket
+    endpoint = "nemotron"  # nemotron, batch, or websocket
     num_requests = 8
     num_rounds = 3
 
@@ -497,9 +497,10 @@ def main():
     if len(sys.argv) >= 5:
         audio_file = sys.argv[4]
 
-    print(f"Canary STT Service - Sequential vs Concurrent Benchmark")
+    print(f"Crane Nemotron Streaming ASR Service - Sequential vs Concurrent Benchmark")
     print(f"{'='*70}")
-    print(f"Endpoints: canary (single file), batch (multipart), websocket (streaming)")
+    print(f"Endpoints: nemotron (single file), batch (multipart), websocket (streaming)")
+    print(f"VAD Engine: Earshot (pyke.io)")
     print(f"{'='*70}\n")
 
     try:

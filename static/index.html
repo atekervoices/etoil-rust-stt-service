@@ -1,0 +1,670 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crane Nemotron 3.5 Realtime Streaming ASR (Luganda & English)</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-base: #0a0d14;
+            --bg-card: rgba(18, 24, 38, 0.75);
+            --bg-card-border: rgba(255, 255, 255, 0.08);
+            --accent-cyan: #00f2fe;
+            --accent-indigo: #4facfe;
+            --accent-emerald: #10b981;
+            --accent-rose: #f43f5e;
+            --accent-amber: #f59e0b;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Outfit', sans-serif;
+            background-color: var(--bg-base);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(circle at 15% 20%, rgba(79, 172, 254, 0.12) 0%, transparent 40%),
+                radial-gradient(circle at 85% 80%, rgba(0, 242, 254, 0.08) 0%, transparent 40%);
+        }
+
+        header {
+            padding: 1.5rem 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid var(--bg-card-border);
+            backdrop-filter: blur(16px);
+            background: rgba(10, 13, 20, 0.6);
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .logo-group {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .logo-badge {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            background: linear-gradient(135deg, var(--accent-indigo), var(--accent-cyan));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 1.2rem;
+            color: #030712;
+            box-shadow: 0 0 20px rgba(0, 242, 254, 0.4);
+        }
+
+        .logo-text h1 {
+            font-size: 1.25rem;
+            font-weight: 600;
+            letter-spacing: -0.02em;
+            background: linear-gradient(90deg, #ffffff, #cbd5e1);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .logo-text p {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .status-pill {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.4rem 0.9rem;
+            border-radius: 9999px;
+            font-size: 0.825rem;
+            font-weight: 500;
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.25);
+            color: var(--accent-emerald);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent-emerald);
+            box-shadow: 0 0 10px var(--accent-emerald);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.4; transform: scale(0.9); }
+            100% { opacity: 1; transform: scale(1); }
+        }
+
+        main {
+            flex: 1;
+            max-width: 1100px;
+            width: 100%;
+            margin: 0 auto;
+            padding: 2.5rem 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 2rem;
+        }
+
+        .hero-banner {
+            text-align: center;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .hero-banner h2 {
+            font-size: 2.25rem;
+            font-weight: 700;
+            letter-spacing: -0.03em;
+        }
+
+        .hero-banner p {
+            max-width: 650px;
+            color: var(--text-secondary);
+            font-size: 1rem;
+            line-height: 1.6;
+        }
+
+        .lang-tags {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 0.5rem;
+        }
+
+        .badge {
+            font-size: 0.75rem;
+            padding: 0.25rem 0.6rem;
+            border-radius: 6px;
+            font-weight: 600;
+            letter-spacing: 0.04em;
+            text-transform: uppercase;
+        }
+
+        .badge-cyan { background: rgba(0, 242, 254, 0.15); color: var(--accent-cyan); border: 1px solid rgba(0, 242, 254, 0.3); }
+        .badge-amber { background: rgba(245, 158, 11, 0.15); color: var(--accent-amber); border: 1px solid rgba(245, 158, 11, 0.3); }
+        .badge-rose { background: rgba(244, 63, 94, 0.15); color: var(--accent-rose); border: 1px solid rgba(244, 63, 94, 0.3); }
+
+        .control-panel {
+            background: var(--bg-card);
+            border: 1px solid var(--bg-card-border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            backdrop-filter: blur(20px);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1.25rem;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.4rem;
+        }
+
+        .input-group label {
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        select, input[type="text"] {
+            background: rgba(10, 13, 20, 0.8);
+            border: 1px solid var(--bg-card-border);
+            padding: 0.65rem 1rem;
+            border-radius: 10px;
+            color: var(--text-primary);
+            font-family: inherit;
+            font-size: 0.95rem;
+            outline: none;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        select:focus, input[type="text"]:focus {
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 12px rgba(0, 242, 254, 0.25);
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 0.75rem;
+            align-items: center;
+        }
+
+        .btn {
+            font-family: inherit;
+            font-size: 0.95rem;
+            font-weight: 600;
+            padding: 0.75rem 1.4rem;
+            border-radius: 12px;
+            border: none;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            transition: all 0.2s ease;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, var(--accent-indigo), var(--accent-cyan));
+            color: #030712;
+            box-shadow: 0 4px 18px rgba(0, 242, 254, 0.35);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 24px rgba(0, 242, 254, 0.5);
+        }
+
+        .btn-danger {
+            background: rgba(244, 63, 94, 0.15);
+            color: var(--accent-rose);
+            border: 1px solid rgba(244, 63, 94, 0.4);
+        }
+
+        .btn-danger:hover {
+            background: rgba(244, 63, 94, 0.25);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
+        .visualizer-container {
+            width: 100%;
+            height: 70px;
+            background: rgba(10, 13, 20, 0.85);
+            border: 1px solid var(--bg-card-border);
+            border-radius: 12px;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+        }
+
+        canvas#waveform {
+            width: 100%;
+            height: 100%;
+        }
+
+        .metrics-strip {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+
+        .metric-card {
+            background: var(--bg-card);
+            border: 1px solid var(--bg-card-border);
+            border-radius: 14px;
+            padding: 1rem 1.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+        }
+
+        .metric-title {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+        }
+
+        .metric-value {
+            font-size: 1.35rem;
+            font-weight: 700;
+            font-family: 'JetBrains Mono', monospace;
+            color: var(--accent-cyan);
+        }
+
+        .transcript-panel {
+            background: var(--bg-card);
+            border: 1px solid var(--bg-card-border);
+            border-radius: 16px;
+            padding: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            min-height: 250px;
+        }
+
+        .panel-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .panel-header h3 {
+            font-size: 1rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-secondary);
+        }
+
+        .btn-clear {
+            background: transparent;
+            border: 1px solid var(--bg-card-border);
+            color: var(--text-secondary);
+            padding: 0.35rem 0.75rem;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.8rem;
+        }
+
+        .transcript-box {
+            flex: 1;
+            font-size: 1.2rem;
+            line-height: 1.8;
+            min-height: 160px;
+            max-height: 380px;
+            overflow-y: auto;
+            word-break: break-word;
+            padding: 1rem;
+            background: rgba(10, 13, 20, 0.6);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+        }
+
+        .transcript-confirmed {
+            color: var(--text-primary);
+        }
+
+        .transcript-partial {
+            color: var(--accent-cyan);
+            font-style: italic;
+            opacity: 0.85;
+            padding-left: 0.25rem;
+        }
+
+        .empty-placeholder {
+            color: var(--text-muted);
+            font-size: 1rem;
+            font-style: italic;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo-group">
+            <div class="logo-badge">⚡</div>
+            <div class="logo-text">
+                <h1>etoil-rust-stt-service</h1>
+                <p>Crane Nemotron 3.5 Streaming (FastConformer RNN-T 0.6B)</p>
+            </div>
+        </div>
+        <div class="status-pill">
+            <div class="status-dot"></div>
+            <span id="wsStatusText">Disconnected</span>
+        </div>
+    </header>
+
+    <main>
+        <div class="hero-banner">
+            <h2>Cache-Aware Realtime Streaming ASR</h2>
+            <p>
+                Real-time speech-to-text with 560ms cache-aware streaming inference. Powered by <strong>CraneAILabs/crane-nemo-asr-1.1</strong> and <strong>parakeet-rs</strong>.
+            </p>
+            <div class="lang-tags">
+                <span class="badge badge-cyan">Luganda (lg)</span>
+                <span class="badge badge-cyan">English (en)</span>
+                <span class="badge badge-amber">Auto-Detect</span>
+                <span class="badge badge-rose">Shona (sn) Excluded</span>
+            </div>
+        </div>
+
+        <div class="control-panel">
+            <div class="input-group">
+                <label for="langSelect">Target Language</label>
+                <select id="langSelect">
+                    <option value="lg">Luganda (lg) - Auto-prompted</option>
+                    <option value="en">English (en) - en-US</option>
+                    <option value="auto" selected>Auto-Detect (auto)</option>
+                </select>
+            </div>
+
+            <div class="btn-group">
+                <button id="startMicBtn" class="btn btn-primary">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+                    Start Microphone
+                </button>
+                <button id="stopMicBtn" class="btn btn-danger" disabled>
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12"/></svg>
+                    Stop
+                </button>
+            </div>
+        </div>
+
+        <div class="visualizer-container">
+            <canvas id="waveform"></canvas>
+        </div>
+
+        <div class="metrics-strip">
+            <div class="metric-card">
+                <div class="metric-title">Chunk Size</div>
+                <div class="metric-value">560 ms</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-title">Input Rate</div>
+                <div class="metric-value">16,000 Hz</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-title">Samples / Chunk</div>
+                <div class="metric-value">8,960</div>
+            </div>
+            <div class="metric-card">
+                <div class="metric-title">Active Language</div>
+                <div class="metric-value" id="activeLangDisplay">auto</div>
+            </div>
+        </div>
+
+        <div class="transcript-panel">
+            <div class="panel-header">
+                <h3>Live Transcription Stream</h3>
+                <button class="btn-clear" id="clearBtn">Clear</button>
+            </div>
+            <div class="transcript-box" id="transcriptBox">
+                <span class="empty-placeholder" id="placeholder">Click "Start Microphone" and speak in Luganda or English...</span>
+                <span class="transcript-confirmed" id="confirmedText"></span>
+                <span class="transcript-partial" id="partialText"></span>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const wsStatusText = document.getElementById('wsStatusText');
+        const startMicBtn = document.getElementById('startMicBtn');
+        const stopMicBtn = document.getElementById('stopMicBtn');
+        const langSelect = document.getElementById('langSelect');
+        const activeLangDisplay = document.getElementById('activeLangDisplay');
+        const confirmedText = document.getElementById('confirmedText');
+        const partialText = document.getElementById('partialText');
+        const placeholder = document.getElementById('placeholder');
+        const clearBtn = document.getElementById('clearBtn');
+        const canvas = document.getElementById('waveform');
+        const ctx = canvas.getContext('2d');
+
+        let ws = null;
+        let audioContext = null;
+        let mediaStream = null;
+        let processor = null;
+        let isRecording = false;
+
+        const CHUNK_SIZE = 8960; // 560ms at 16kHz
+        let pcmBuffer = [];
+
+        function connectWebSocket() {
+            const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const lang = langSelect.value;
+            const wsUrl = `${proto}//${window.location.host}/v1/realtime?language=${lang}`;
+
+            ws = new WebSocket(wsUrl);
+
+            ws.onopen = () => {
+                wsStatusText.textContent = 'Connected (Nemotron Ready)';
+                wsStatusText.parentElement.style.borderColor = 'rgba(16, 185, 129, 0.4)';
+                sendConfig();
+            };
+
+            ws.onclose = () => {
+                wsStatusText.textContent = 'Disconnected';
+                wsStatusText.parentElement.style.borderColor = 'rgba(244, 63, 94, 0.4)';
+                setTimeout(connectWebSocket, 3000);
+            };
+
+            ws.onerror = (e) => {
+                console.error('WebSocket Error:', e);
+            };
+
+            ws.onmessage = (event) => {
+                try {
+                    const msg = JSON.parse(event.data);
+                    handleServerMessage(msg);
+                } catch (e) {
+                    console.error('Failed to parse WS msg:', e);
+                }
+            };
+        }
+
+        function sendConfig() {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const lang = langSelect.value;
+                activeLangDisplay.textContent = lang;
+                ws.send(JSON.stringify({
+                    type: 'config',
+                    language: lang,
+                    sample_rate: 16000
+                }));
+            }
+        }
+
+        langSelect.addEventListener('change', () => {
+            sendConfig();
+        });
+
+        clearBtn.addEventListener('click', () => {
+            confirmedText.textContent = '';
+            partialText.textContent = '';
+            placeholder.style.display = 'inline';
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'reset' }));
+            }
+        });
+
+        function handleServerMessage(msg) {
+            if (msg.type === 'ready') {
+                console.log('Model ready:', msg);
+            } else if (msg.type === 'partial') {
+                placeholder.style.display = 'none';
+                partialText.textContent = ' ' + msg.text;
+            } else if (msg.type === 'final') {
+                placeholder.style.display = 'none';
+                partialText.textContent = '';
+                const current = confirmedText.textContent.trim();
+                confirmedText.textContent = current ? (current + ' ' + msg.text) : msg.text;
+            } else if (msg.type === 'error') {
+                console.error('Server error:', msg.message);
+                alert('STT Server error: ' + msg.message);
+            }
+        }
+
+        async function startRecording() {
+            try {
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        channelCount: 1,
+                        sampleRate: 16000,
+                        echoCancellation: true,
+                        noiseSuppression: true
+                    }
+                });
+
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                const source = audioContext.createMediaStreamSource(mediaStream);
+
+                processor = audioContext.createScriptProcessor(4096, 1, 1);
+                source.connect(processor);
+                processor.connect(audioContext.destination);
+
+                processor.onaudioprocess = (e) => {
+                    if (!isRecording) return;
+                    const inputData = e.inputBuffer.getChannelData(0);
+                    drawWaveform(inputData);
+
+                    // Convert float32 to int16 PCM
+                    const pcm16 = new Int16Array(inputData.length);
+                    for (let i = 0; i < inputData.length; i++) {
+                        const s = Math.max(-1, Math.min(1, inputData[i]));
+                        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                    }
+
+                    // Base64 encode and stream to server
+                    const bytes = new Uint8Array(pcm16.buffer);
+                    let binary = '';
+                    for (let i = 0; i < bytes.byteLength; i++) {
+                        binary += String.fromCharCode(bytes[i]);
+                    }
+                    const base64Audio = btoa(binary);
+
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({
+                            type: 'audio',
+                            data: base64Audio,
+                            sample_rate: 16000
+                        }));
+                    }
+                };
+
+                isRecording = true;
+                startMicBtn.disabled = true;
+                stopMicBtn.disabled = false;
+                placeholder.style.display = 'none';
+            } catch (err) {
+                console.error('Error accessing microphone:', err);
+                alert('Microphone access failed: ' + err.message);
+            }
+        }
+
+        function stopRecording() {
+            isRecording = false;
+            startMicBtn.disabled = false;
+            stopMicBtn.disabled = true;
+
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'flush' }));
+            }
+
+            if (processor) processor.disconnect();
+            if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
+            if (audioContext) audioContext.close();
+            clearWaveform();
+        }
+
+        startMicBtn.addEventListener('click', startRecording);
+        stopMicBtn.addEventListener('click', stopRecording);
+
+        function drawWaveform(data) {
+            canvas.width = canvas.offsetWidth;
+            canvas.height = canvas.offsetHeight;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            ctx.lineWidth = 2;
+            ctx.strokeStyle = '#00f2fe';
+            ctx.beginPath();
+
+            const sliceWidth = canvas.width / data.length;
+            let x = 0;
+
+            for (let i = 0; i < data.length; i++) {
+                const v = data[i] * 3;
+                const y = (canvas.height / 2) + (v * canvas.height / 2);
+                if (i === 0) ctx.moveTo(x, y);
+                else ctx.lineTo(x, y);
+                x += sliceWidth;
+            }
+
+            ctx.stroke();
+        }
+
+        function clearWaveform() {
+            canvas.width = canvas.offsetWidth;
+            canvas.height = canvas.offsetHeight;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+        }
+
+        connectWebSocket();
+    </script>
+</body>
+</html>
