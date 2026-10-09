@@ -21,7 +21,6 @@ cuda = ["parakeet-rs/cuda"]
 
 [dependencies]
 parakeet-rs = { git = "https://github.com/altunenes/parakeet-rs.git", default-features = false, features = ["cpu", "ort-defaults"] }
-earshot = "1"
 hound = "3.5"
 cpal = "0.17.3"
 tokio = { version = "1.0", features = ["full"] }

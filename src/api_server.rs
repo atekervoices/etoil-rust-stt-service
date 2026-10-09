@@ -2,7 +2,6 @@ use std::sync::Arc;
 
 mod language;
 mod server;
-mod vad_implementation;
 mod websocket;
 
 use server::{run_server, NemotronService};

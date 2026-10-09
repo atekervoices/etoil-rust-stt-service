@@ -8,7 +8,6 @@ use tokio::sync::mpsc;
 use warp::ws::{Message as WarpMessage, WebSocket};
 
 use crate::language::{CHUNK_SIZE, SupportedLanguage};
-use crate::vad_implementation::normalize_punctuation_spacing;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -70,7 +69,6 @@ pub enum WSMessage {
     #[serde(rename = "ready")]
     Ready {
         model: String,
-        vad_engine: String,
         supported_languages: Vec<String>,
         chunk_size_samples: usize,
     },
@@ -100,10 +98,10 @@ impl WebSocketHandler {
         // Send ready message on connection
         let ready_msg = WSMessage::Ready {
             model: "CraneAILabs/crane-nemo-asr-1.1 (Nemotron 3.5 Streaming)".to_string(),
-            vad_engine: "None (Native Transducer Streaming)".to_string(),
             supported_languages: vec![
                 "lg (Luganda)".to_string(),
-                "en (English)".to_string(),
+                "en (English US)".to_string(),
+                "en-gb (English Commonwealth)".to_string(),
                 "auto (Auto-detect)".to_string(),
             ],
             chunk_size_samples: CHUNK_SIZE,
@@ -288,8 +286,7 @@ impl WebSocketHandler {
                                     }
                                 }
 
-                                let final_text =
-                                    normalize_punctuation_spacing(accumulated_transcript.trim());
+                                let final_text = accumulated_transcript.trim().to_string();
                                 if !final_text.is_empty() {
                                     // Server-side deduplication (Modal pattern):
                                     // Only emit the delta if final_text starts with last_emitted_final

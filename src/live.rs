@@ -7,10 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 mod language;
-mod vad_implementation;
 
 use language::{CHUNK_SIZE, SupportedLanguage};
-use vad_implementation::{normalize_punctuation_spacing, EarshotVAD, VADResult};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
@@ -29,11 +27,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     println!("============================================================");
-    println!(" Crane Nemotron 3.5 Live Streaming ASR (Earshot Neural VAD)");
+    println!(" Crane Nemotron 3.5 Live Streaming ASR");
     println!(" Language: {} ({})", language.name(), language.code());
     println!(" Model directory: {model_dir}");
     println!(" Chunk size: 560ms (8960 samples @ 16kHz)");
-    println!(" VAD Engine: Earshot (pyke.io, 16ms neural detector)");
     println!(" Note: Shona ('sn') is excluded.");
     println!("============================================================");
 
@@ -113,7 +110,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("\n Microphones listening... Speak now (Press Ctrl+C to stop)");
     println!("------------------------------------------------------------");
 
-    let mut vad = EarshotVAD::new();
     let mut current_utterance = String::new();
 
     // Streaming processing loop
@@ -128,25 +124,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         if let Some(chunk) = chunk_opt {
-            let vad_res = vad.process_chunk(&chunk);
-            match vad_res {
-                VADResult::SpeechStarted => {
-                    print!("\n[Speech Detected] ");
-                    std::io::stdout().flush()?;
-                }
-                VADResult::EndOfUtterance { should_finalize, .. } => {
-                    if should_finalize && !current_utterance.trim().is_empty() {
-                        println!(
-                            "\n[Final Utterance]: {}\n",
-                            normalize_punctuation_spacing(current_utterance.trim())
-                        );
-                        model.reset();
-                        vad.reset();
-                        current_utterance.clear();
-                    }
-                }
-                _ => {}
-            }
 
             match model.transcribe_chunk(&chunk) {
                 Ok(delta) => {

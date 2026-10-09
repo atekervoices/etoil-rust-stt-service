@@ -8,7 +8,6 @@ use tokio::sync::Mutex;
 use warp::{ws::Ws, Filter};
 
 use crate::language::{CHUNK_DURATION_MS, CHUNK_SIZE, SAMPLE_RATE, SupportedLanguage};
-use crate::vad_implementation::normalize_punctuation_spacing;
 use crate::websocket::WebSocketHandler;
 
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
@@ -74,7 +73,6 @@ pub enum TranscribeResponse {
 struct HealthResponse {
     status: String,
     model: String,
-    vad_engine: String,
     supported_languages: Vec<String>,
     excluded_languages: Vec<String>,
     chunk_size_samples: usize,
@@ -85,10 +83,10 @@ async fn health_check() -> impl warp::Reply {
     warp::reply::json(&HealthResponse {
         status: "healthy".to_string(),
         model: "CraneAILabs/crane-nemo-asr-1.1 (Nemotron 3.5 Streaming)".to_string(),
-        vad_engine: "Earshot (pyke.io, 3,600x RTF neural VAD)".to_string(),
         supported_languages: vec![
             "lg (Luganda)".to_string(),
-            "en (English)".to_string(),
+            "en (English US)".to_string(),
+            "en-gb (English Commonwealth)".to_string(),
             "auto (Auto-detect)".to_string(),
         ],
         excluded_languages: vec!["sn (Shona - disabled)".to_string()],
@@ -374,7 +372,7 @@ impl NemotronService {
         };
 
         Ok(TranscriptionResponse {
-            text: normalize_punctuation_spacing(full_text.trim()),
+            text: full_text.trim().to_string(),
             processing_time,
             audio_duration,
             real_time_factor,
@@ -501,7 +499,7 @@ pub async fn run_server(service: Arc<NemotronService>, port: u16) {
                 "openapi": "3.0.0",
                 "info": {
                     "title": "Crane Nemotron Cache-Aware Streaming ASR API",
-                    "description": "Production-grade Speech-to-Text API specializing in Luganda ('lg') and English ('en'), using Crane Nemotron-3.5 0.6B FastConformer RNN-Transducer with Earshot Neural VAD (3,600x RTF).",
+                    "description": "Production-grade Speech-to-Text API specializing in Luganda ('lg') and English ('en'), using Crane Nemotron-3.5 0.6B FastConformer RNN-Transducer.",
                     "version": "1.2.0",
                     "contact": { "name": "API Support" }
                 },
@@ -613,7 +611,7 @@ pub async fn run_server(service: Arc<NemotronService>, port: u16) {
                     "/health": {
                         "get": {
                             "summary": "Service Health Check",
-                            "description": "Returns model and VAD status, supported languages, chunk sizes.",
+                            "description": "Returns model status, supported languages, chunk sizes.",
                             "responses": { "200": { "description": "Healthy" } }
                         }
                     }
@@ -710,8 +708,8 @@ pub async fn run_server(service: Arc<NemotronService>, port: u16) {
 
     println!("============================================================");
     println!(" Crane Nemotron 3.5 Streaming ASR Service running on port {port}");
-    println!(" Engine: parakeet-rs | VAD: Earshot (pyke.io, 3,600x RTF)");
-    println!(" Languages: Luganda ('lg'), English ('en'), Auto ('auto')");
+    println!(" Engine: parakeet-rs | FastConformer Native Transducer");
+    println!(" Languages: Luganda ('lg'), English ('en', 'en-gb'), Auto ('auto')");
     println!(" Shona ('sn'): EXCLUDED / DISABLED");
     println!("------------------------------------------------------------");
     println!(" [WebSocket Streaming]  ws://localhost:{port}/v1/realtime");

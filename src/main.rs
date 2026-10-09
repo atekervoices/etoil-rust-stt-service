@@ -4,10 +4,8 @@ use std::path::Path;
 use std::time::Instant;
 
 mod language;
-mod vad_implementation;
 
 use language::{CHUNK_SIZE, SAMPLE_RATE, SupportedLanguage};
-use vad_implementation::normalize_punctuation_spacing;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
@@ -129,7 +127,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rtf = if audio_duration > 0.0 { elapsed / audio_duration } else { 0.0 };
 
     println!("\n=== Transcription Complete ===");
-    println!("Final Text: {}", normalize_punctuation_spacing(full_transcript.trim()));
+    println!("Final Text: {}", full_transcript.trim());
     println!("Processing Time: {:.3}s", elapsed);
     println!("Audio Duration:  {:.3}s", audio_duration);
     println!("Real-Time Factor (RTF): {:.4}x (lower is faster)", rtf);
