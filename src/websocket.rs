@@ -369,6 +369,7 @@ impl WebSocketHandler {
                                                     .send(WSMessage::Transcript {
                                                         text: current_clean.clone(),
                                                         is_final: false,
+                                                        finalize: None,
                                                     })
                                                     .await;
 
