@@ -482,7 +482,7 @@ def run_batch_comparison(server_url, audio_file, endpoint, num_requests, num_rou
 
 
 def main():
-    server_url = "http://localhost:8080"
+    server_url = "http://localhost:8099"
     audio_file = "test_audio.wav"
     endpoint = "nemotron"  # nemotron, batch, or websocket
     num_requests = 8

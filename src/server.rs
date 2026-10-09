@@ -586,7 +586,7 @@ pub async fn run_server(service: Arc<NemotronService>, port: u16) {
                     "/v1/realtime": {
                         "get": {
                             "summary": "Real-time Streaming WebSocket (AssemblyAI style)",
-                            "description": "Bidirectional WebSocket connection for live 560ms cache-aware streaming. Connect with query param e.g. ws://localhost:8080/v1/realtime?language=lg. Supported messages: 'audio' (base64 PCM), 'partial' (delta text), 'final' (completed utterance), 'speech_started', 'speech_ended', 'reset', 'flush'.",
+                            "description": "Bidirectional WebSocket connection for live 560ms cache-aware streaming. Connect with query param e.g. ws://localhost:8099/v1/realtime?language=lg. Supported messages: 'audio' (base64 PCM), 'partial' (delta text), 'final' (completed utterance), 'speech_started', 'speech_ended', 'reset', 'flush'.",
                             "parameters": [
                                 {
                                     "name": "language",

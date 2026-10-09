@@ -109,19 +109,19 @@ Expected files in `./crane-nemo-asr-1.1-onnx`:
 ### 1. Start the API Server
 
 ```bash
-# Using default model directory (crane-nemo-asr-1.1-onnx) on port 8080:
+# Using default model directory (crane-nemo-asr-1.1-onnx) on port 8099:
 cargo run --release --bin api_server
 
 # Or with custom model path / port:
-MODEL_PATH=./crane-nemo-asr-1.1-onnx PORT=8080 cargo run --release --bin api_server
+MODEL_PATH=./crane-nemo-asr-1.1-onnx PORT=8099 cargo run --release --bin api_server
 ```
 
 Once started:
-- **Interactive Web Demo**: [http://localhost:8080/](http://localhost:8080/)
-- **Interactive Documentation**: [http://localhost:8080/docs](http://localhost:8080/docs)
-- **OpenAPI 3.0 JSON Spec**: [http://localhost:8080/docs/openapi.json](http://localhost:8080/docs/openapi.json)
-- **Health Check**: [http://localhost:8080/health](http://localhost:8080/health)
-- **Live Streaming WebSocket**: `ws://localhost:8080/v1/realtime`
+- **Interactive Web Demo**: [http://localhost:8099/](http://localhost:8099/)
+- **Interactive Documentation**: [http://localhost:8099/docs](http://localhost:8099/docs)
+- **OpenAPI 3.0 JSON Spec**: [http://localhost:8099/docs/openapi.json](http://localhost:8099/docs/openapi.json)
+- **Health Check**: [http://localhost:8099/health](http://localhost:8099/health)
+- **Live Streaming WebSocket**: `ws://localhost:8099/v1/realtime`
 
 ---
 
@@ -167,12 +167,12 @@ Content-Type: application/octet-stream | audio/wav | multipart/form-data
 #### A. Single File Upload (Raw Audio or 1-file Multipart)
 ```bash
 # Via raw binary:
-curl -X POST "http://localhost:8080/v1/transcribe?language=lg" \
+curl -X POST "http://localhost:8099/v1/transcribe?language=lg" \
   -H "Content-Type: application/octet-stream" \
   --data-binary @luganda_audio.wav
 
 # Or via AssemblyAI-style multipart upload:
-curl -X POST "http://localhost:8080/v1/transcribe?language=lg" \
+curl -X POST "http://localhost:8099/v1/transcribe?language=lg" \
   -F "audio=@luganda_audio.wav"
 ```
 **Response**:
@@ -189,7 +189,7 @@ curl -X POST "http://localhost:8080/v1/transcribe?language=lg" \
 #### B. Multi-File Batch Transcription
 Uploading 2 or more files to `POST /v1/transcribe` (or to explicit `POST /v1/transcribe/batch`):
 ```bash
-curl -X POST "http://localhost:8080/v1/transcribe?language=en" \
+curl -X POST "http://localhost:8099/v1/transcribe?language=en" \
   -F "file1=@clip1.wav" \
   -F "file2=@clip2.wav"
 ```
@@ -227,12 +227,12 @@ curl -X POST "http://localhost:8080/v1/transcribe?language=en" \
 
 ### 2. Real-Time Streaming WebSocket (`/v1/realtime`)
 
-Connect to `ws://localhost:8080/v1/realtime`.
+Connect to `ws://localhost:8099/v1/realtime`.
 
 #### Connection Handshake with Query Parameters
 Connect directly with target language:
 ```text
-ws://localhost:8080/v1/realtime?language=lg&sample_rate=16000
+ws://localhost:8099/v1/realtime?language=lg&sample_rate=16000
 ```
 
 #### In-Band Configuration (Optional)
@@ -279,10 +279,10 @@ Send base64-encoded 16-bit PCM chunks (16kHz mono):
 
 ### 3. Interactive Documentation & OpenAPI
 
-- **Interactive Swagger UI**: [http://localhost:8080/docs](http://localhost:8080/docs)
-- **OpenAPI 3.0 JSON Specification**: [http://localhost:8080/docs/openapi.json](http://localhost:8080/docs/openapi.json)
-- **Interactive Web Demo UI**: [http://localhost:8080/](http://localhost:8080/)
-- **Health Check**: [http://localhost:8080/health](http://localhost:8080/health)
+- **Interactive Swagger UI**: [http://localhost:8099/docs](http://localhost:8099/docs)
+- **OpenAPI 3.0 JSON Specification**: [http://localhost:8099/docs/openapi.json](http://localhost:8099/docs/openapi.json)
+- **Interactive Web Demo UI**: [http://localhost:8099/](http://localhost:8099/)
+- **Health Check**: [http://localhost:8099/health](http://localhost:8099/health)
 
 #### WebSocket Control Messages
 - **Flush**: `{ "type": "flush" }` — Pads remaining audio buffer and outputs final transcript.
@@ -312,10 +312,10 @@ docker build -t crane-nemotron-stt -f Dockerfile .
 docker build -t crane-nemotron-stt-cpu -f Dockerfile.cpu .
 
 # Run with GPU (Self-contained, no host volume required):
-docker run --gpus all -p 8080:8080 crane-nemotron-stt
+docker run --gpus all -p 8099:8099 crane-nemotron-stt
 
 # Or run with CPU:
-docker run -p 8080:8080 crane-nemotron-stt-cpu
+docker run -p 8099:8099 crane-nemotron-stt-cpu
 ```
 
 ---
@@ -324,7 +324,7 @@ docker run -p 8080:8080 crane-nemotron-stt-cpu
 
 Verify that language validation rejects Shona (`sn`):
 ```bash
-curl -X POST "http://localhost:8080/v1/transcribe?language=sn" \
+curl -X POST "http://localhost:8099/v1/transcribe?language=sn" \
   -H "Content-Type: application/octet-stream" \
   --data-binary @test.wav
 ```

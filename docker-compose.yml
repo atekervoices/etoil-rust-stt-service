@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile
     container_name: crane-nemotron-stt-service
     ports:
-      - "8080:8080"
+      - "8099:8099"
     volumes:
       # Model is baked directly into the image at /app/crane-nemo-asr-1.1-onnx!
       # Optional: Uncomment below only if you wish to override with external host weights:
@@ -16,7 +16,7 @@ services:
     environment:
       - RUST_LOG=info
       - MODEL_PATH=/app/crane-nemo-asr-1.1-onnx
-      - PORT=8080
+      - PORT=8099
     # GPU support (requires NVIDIA Container Toolkit)
     deploy:
       resources:
@@ -27,7 +27,7 @@ services:
               capabilities: [gpu]
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8099/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -40,7 +40,7 @@ services:
   #     dockerfile: Dockerfile.cpu
   #   container_name: crane-nemotron-stt-service-cpu
   #   ports:
-  #     - "8080:8080"
+  #     - "8099:8099"
   #   volumes:
   #     # Model is baked into image. Uncomment only to override with external host weights:
   #     # - ./crane-nemo-asr-1.1-onnx:/app/crane-nemo-asr-1.1-onnx:ro
@@ -48,5 +48,5 @@ services:
   #   environment:
   #     - RUST_LOG=info
   #     - MODEL_PATH=/app/crane-nemo-asr-1.1-onnx
-  #     - PORT=8080
+  #     - PORT=8099
   #   restart: unless-stopped

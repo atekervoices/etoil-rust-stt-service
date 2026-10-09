@@ -99,16 +99,16 @@ COPY --from=builder /app/target/release/api_server /app/api_server
 COPY --from=model-exporter /export/crane-nemo-asr-1.1-onnx /app/crane-nemo-asr-1.1-onnx
 
 # Expose HTTP / WebSocket API port
-EXPOSE 8080
+EXPOSE 8099
 
 # Environment variables
 ENV RUST_LOG=info
 ENV MODEL_PATH=/app/crane-nemo-asr-1.1-onnx
-ENV PORT=8080
+ENV PORT=8099
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD curl -f http://localhost:8080/health || exit 1
+    CMD curl -f http://localhost:8099/health || exit 1
 
 # Launch the STT API server
 CMD ["/app/api_server"]

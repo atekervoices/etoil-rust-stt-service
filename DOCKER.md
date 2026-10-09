@@ -31,7 +31,7 @@ docker compose logs -f
 
 3. **Verify health check:**
 ```bash
-curl http://localhost:8080/health
+curl http://localhost:8099/health
 ```
 
 Expected output:
@@ -71,7 +71,7 @@ Because the model weights and Rust binary are both baked into the container duri
 docker run -d \
   --name crane-nemotron-stt \
   --gpus all \
-  -p 8080:8080 \
+  -p 8099:8099 \
   crane-nemotron-stt:latest
 ```
 
@@ -79,7 +79,7 @@ docker run -d \
 ```bash
 docker run -d \
   --name crane-nemotron-stt \
-  -p 8080:8080 \
+  -p 8099:8099 \
   crane-nemotron-stt:cpu
 ```
 
@@ -91,13 +91,13 @@ docker run -d \
 
 ### 1. Health Check
 ```bash
-curl http://localhost:8080/health
+curl http://localhost:8099/health
 ```
 
 ### 2. Luganda Transcription (Single File)
 ```bash
 curl -X POST \
-  "http://localhost:8080/v1/transcribe?language=lg" \
+  "http://localhost:8099/v1/transcribe?language=lg" \
   -H "Content-Type: application/octet-stream" \
   --data-binary @audio/luganda_sample.wav
 ```
@@ -105,7 +105,7 @@ curl -X POST \
 ### 3. Batch Transcription (Multiple Files)
 ```bash
 curl -X POST \
-  "http://localhost:8080/v1/transcribe/batch?language=en" \
+  "http://localhost:8099/v1/transcribe/batch?language=en" \
   -F "file1=@audio/sample1.wav" \
   -F "file2=@audio/sample2.wav"
 ```
@@ -113,7 +113,7 @@ curl -X POST \
 ### 4. Verify Shona is Excluded
 ```bash
 curl -X POST \
-  "http://localhost:8080/v1/transcribe?language=sn" \
+  "http://localhost:8099/v1/transcribe?language=sn" \
   -H "Content-Type: application/octet-stream" \
   --data-binary @audio/sample.wav
 ```
@@ -123,7 +123,7 @@ Response:
 ```
 
 ### 5. WebSocket Streaming & Documentation
-- **Live WebSocket**: `ws://localhost:8080/v1/realtime?language=lg`
-- **Interactive Documentation**: `http://localhost:8080/docs`
-- **OpenAPI 3.0 Spec**: `http://localhost:8080/docs/openapi.json`
-- **Web Demo Interface**: `http://localhost:8080/`
+- **Live WebSocket**: `ws://localhost:8099/v1/realtime?language=lg`
+- **Interactive Documentation**: `http://localhost:8099/docs`
+- **OpenAPI 3.0 Spec**: `http://localhost:8099/docs/openapi.json`
+- **Web Demo Interface**: `http://localhost:8099/`
