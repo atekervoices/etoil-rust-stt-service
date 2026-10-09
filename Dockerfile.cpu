@@ -30,6 +30,7 @@ RUN pip install --no-cache-dir torch torchaudio --extra-index-url https://downlo
 # Install export requirements and NeMo toolkit
 RUN pip install --no-cache-dir \
     "numpy<2.0" \
+    "pyarrow<18.0.0" \
     onnx \
     onnxruntime \
     soundfile \
