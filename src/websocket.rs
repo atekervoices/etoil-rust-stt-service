@@ -7,7 +7,7 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use warp::ws::{Message as WarpMessage, WebSocket};
 
-use crate::language::{CHUNK_SIZE, SAMPLE_RATE, SupportedLanguage};
+use crate::language::{CHUNK_SIZE, SupportedLanguage};
 use crate::vad_implementation::{normalize_punctuation_spacing, EarshotVAD, VADResult};
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -120,17 +120,16 @@ impl WebSocketHandler {
         // Connection state
         let mut audio_buffer: VecDeque<f32> = VecDeque::with_capacity(CHUNK_SIZE * 4);
         let mut accumulated_transcript = String::new();
-        let mut nemotron_model: Option<Nemotron> = None;
         let mut vad = EarshotVAD::new();
         let start_time = std::time::Instant::now();
 
         // Load default model session
-        match Nemotron::from_pretrained(self.model_path.as_str(), None) {
+        let mut nemotron_model = match Nemotron::from_pretrained(self.model_path.as_str(), None) {
             Ok(mut model) => {
                 if model.mode() == NemotronMode::Multilingual {
                     let _ = model.set_target_lang(active_language.to_nemotron_lang());
                 }
-                nemotron_model = Some(model);
+                Some(model)
             }
             Err(e) => {
                 let _ = tx

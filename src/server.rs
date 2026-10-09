@@ -5,7 +5,6 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::sync::Mutex;
-use utoipa::OpenApi;
 use warp::{ws::Ws, Filter};
 
 use crate::language::{CHUNK_DURATION_MS, CHUNK_SIZE, SAMPLE_RATE, SupportedLanguage};

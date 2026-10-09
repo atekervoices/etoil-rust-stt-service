@@ -1,7 +1,10 @@
 //! High-performance Neural Voice Activity Detection (VAD) powered by Earshot (pyke.io).
 //! Achieves 3,600x real-time factor (0.0003 RTF) with pure-Rust neural VAD.
 
-use earshot::{Detector, FRAME_SIZE};
+use earshot::Detector;
+
+/// 256 samples per frame (16ms @ 16kHz) for Earshot neural VAD
+pub const EARSHOT_FRAME_SIZE: usize = 256;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum VADResult {
@@ -59,8 +62,8 @@ impl EarshotVAD {
         let mut chunk_had_utterance_end = false;
 
         // Process in 256-sample frames (16ms @ 16kHz)
-        for frame in chunk.chunks_exact(FRAME_SIZE) {
-            let score = self.detector.predict(frame);
+        for frame in chunk.chunks_exact(EARSHOT_FRAME_SIZE) {
+            let score = self.detector.predict_f32(frame);
             let is_voice = score.is_voice();
 
             if is_voice {
