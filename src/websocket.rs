@@ -150,6 +150,7 @@ impl WebSocketHandler {
         };
 
         while let Some(msg) = ws_rx.next().await {
+            let mut new_audio_received = false;
             match msg {
                 Ok(message) => {
                     if message.is_text() {
@@ -235,125 +236,7 @@ impl WebSocketHandler {
                                         i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0;
                                     audio_buffer.push_back(sample);
                                 }
-
-                                // Process full 560ms chunks (8960 samples)
-                                while audio_buffer.len() >= CHUNK_SIZE {
-                                    let chunk: Vec<f32> =
-                                        audio_buffer.drain(..CHUNK_SIZE).collect();
-
-                                    // Earshot Neural VAD processing (256-sample / 16ms frames)
-                                    let vad_res = vad.process_chunk(&chunk);
-                                    match vad_res {
-                                        VADResult::SpeechStarted => {
-                                            let _ = tx
-                                                .send(WSMessage::SpeechStarted {
-                                                    timestamp: start_time.elapsed().as_secs_f64(),
-                                                })
-                                                .await;
-                                        }
-                                        VADResult::EndOfUtterance {
-                                            should_finalize, ..
-                                        } => {
-                                            if should_finalize && !accumulated_transcript.trim().is_empty() {
-                                                // Flush 2 zero-chunks through Nemotron to emit any trailing lookahead tokens
-                                                if let Some(ref mut model) = nemotron_model {
-                                                    let flush_chunk = vec![0.0f32; CHUNK_SIZE];
-                                                    for _ in 0..2 {
-                                                        if let Ok(flush_delta) = model.transcribe_chunk(&flush_chunk) {
-                                                            if !flush_delta.is_empty() {
-                                                                accumulated_transcript.push_str(&flush_delta);
-                                                            }
-                                                        }
-                                                    }
-                                                }
-
-                                                let _ = tx
-                                                    .send(WSMessage::SpeechEnded {
-                                                        timestamp: start_time
-                                                            .elapsed()
-                                                            .as_secs_f64(),
-                                                    })
-                                                    .await;
-
-                                                let final_text = normalize_punctuation_spacing(
-                                                    accumulated_transcript.trim(),
-                                                );
-                                                if !final_text.is_empty() {
-                                                    let _ = tx
-                                                        .send(WSMessage::Transcript {
-                                                            text: final_text.clone(),
-                                                            is_final: true,
-                                                        })
-                                                        .await;
-
-                                                    let _ = tx
-                                                        .send(WSMessage::Final {
-                                                            text: final_text,
-                                                            confidence: 0.95,
-                                                            timestamp: start_time
-                                                                .elapsed()
-                                                                .as_secs_f64(),
-                                                            processing_time: start_time
-                                                                .elapsed()
-                                                                .as_secs_f64(),
-                                                        })
-                                                        .await;
-                                                }
-
-                                                vad.reset();
-                                                accumulated_transcript.clear();
-                                                last_emitted_text.clear();
-                                            }
-                                        }
-                                        _ => {}
-                                    }
-
-                                    // Stream through Nemotron cache-aware inference
-                                    if let Some(ref mut model) = nemotron_model {
-                                        match model.transcribe_chunk(&chunk) {
-                                            Ok(delta) => {
-                                                if !delta.is_empty() {
-                                                    // SentencePiece naturally includes leading whitespace on new words.
-                                                    // Appending verbatim preserves whole words instead of breaking subwords.
-                                                    accumulated_transcript.push_str(&delta);
-
-                                                    let current_clean = accumulated_transcript.trim().to_string();
-                                                    if !current_clean.is_empty() && current_clean != last_emitted_text {
-                                                        last_emitted_text = current_clean.clone();
-
-                                                        // Standard Pipecat / streaming interim transcript
-                                                        let _ = tx
-                                                            .send(WSMessage::Transcript {
-                                                                text: current_clean.clone(),
-                                                                is_final: false,
-                                                            })
-                                                            .await;
-
-                                                        let _ = tx
-                                                            .send(WSMessage::Partial {
-                                                                text: delta,
-                                                                accumulated_text: current_clean,
-                                                                confidence: 0.95,
-                                                                timestamp: start_time
-                                                                    .elapsed()
-                                                                    .as_secs_f64(),
-                                                            })
-                                                            .await;
-                                                    }
-                                                }
-                                            }
-                                            Err(e) => {
-                                                let _ = tx
-                                                    .send(WSMessage::Error {
-                                                        message: format!(
-                                                            "Nemotron inference error: {e}"
-                                                        ),
-                                                    })
-                                                    .await;
-                                            }
-                                        }
-                                    }
-                                }
+                                new_audio_received = true;
                             }
 
                             WSMessage::Reset => {
@@ -389,7 +272,6 @@ impl WebSocketHandler {
                                 let final_text =
                                     normalize_punctuation_spacing(accumulated_transcript.trim());
                                 if !final_text.is_empty() {
-                                    // Standard transcript message
                                     let _ = tx
                                         .send(WSMessage::Transcript {
                                             text: final_text.clone(),
@@ -397,7 +279,6 @@ impl WebSocketHandler {
                                         })
                                         .await;
 
-                                    // Legacy Final message
                                     let _ = tx
                                         .send(WSMessage::Final {
                                             text: final_text,
@@ -407,25 +288,36 @@ impl WebSocketHandler {
                                         })
                                         .await;
                                 }
+                                audio_buffer.clear();
                                 accumulated_transcript.clear();
                                 last_emitted_text.clear();
+                                if let Some(ref mut model) = nemotron_model {
+                                    model.reset();
+                                }
+                                vad.reset();
                             }
 
                             _ => {}
                         }
                     } else if message.is_binary() {
-                        // Support direct raw PCM 16-bit little-endian binary streaming (Pipecat / browser ArrayBuffer)
+                        // Support direct raw PCM 16-bit little-endian binary streaming
                         let audio_bytes = message.as_bytes();
                         for chunk in audio_bytes.chunks_exact(2) {
                             let sample =
                                 i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0;
                             audio_buffer.push_back(sample);
                         }
+                        new_audio_received = true;
+                    } else if message.is_close() {
+                        break;
+                    }
 
-                        // Process full chunks
+                    // Unified audio chunk processing
+                    if new_audio_received {
                         while audio_buffer.len() >= CHUNK_SIZE {
                             let chunk: Vec<f32> = audio_buffer.drain(..CHUNK_SIZE).collect();
 
+                            // Earshot Neural VAD processing
                             let vad_res = vad.process_chunk(&chunk);
                             match vad_res {
                                 VADResult::SpeechStarted => {
@@ -437,17 +329,6 @@ impl WebSocketHandler {
                                 }
                                 VADResult::EndOfUtterance { should_finalize, .. } => {
                                     if should_finalize && !accumulated_transcript.trim().is_empty() {
-                                        if let Some(ref mut model) = nemotron_model {
-                                            let flush_chunk = vec![0.0f32; CHUNK_SIZE];
-                                            for _ in 0..2 {
-                                                if let Ok(flush_delta) = model.transcribe_chunk(&flush_chunk) {
-                                                    if !flush_delta.is_empty() {
-                                                        accumulated_transcript.push_str(&flush_delta);
-                                                    }
-                                                }
-                                            }
-                                        }
-
                                         let _ = tx
                                             .send(WSMessage::SpeechEnded {
                                                 timestamp: start_time.elapsed().as_secs_f64(),
@@ -483,37 +364,45 @@ impl WebSocketHandler {
                                 _ => {}
                             }
 
+                            // Continuous stateful Nemotron streaming (cache preserved across pauses)
                             if let Some(ref mut model) = nemotron_model {
-                                if let Ok(delta) = model.transcribe_chunk(&chunk) {
-                                    if !delta.is_empty() {
-                                        accumulated_transcript.push_str(&delta);
+                                match model.transcribe_chunk(&chunk) {
+                                    Ok(delta) => {
+                                        if !delta.is_empty() {
+                                            accumulated_transcript.push_str(&delta);
 
-                                        let current_clean = accumulated_transcript.trim().to_string();
-                                        if !current_clean.is_empty() && current_clean != last_emitted_text {
-                                            last_emitted_text = current_clean.clone();
+                                            let current_clean = accumulated_transcript.trim().to_string();
+                                            if !current_clean.is_empty() && current_clean != last_emitted_text {
+                                                last_emitted_text = current_clean.clone();
 
-                                            let _ = tx
-                                                .send(WSMessage::Transcript {
-                                                    text: current_clean.clone(),
-                                                    is_final: false,
-                                                })
-                                                .await;
+                                                let _ = tx
+                                                    .send(WSMessage::Transcript {
+                                                        text: current_clean.clone(),
+                                                        is_final: false,
+                                                    })
+                                                    .await;
 
-                                            let _ = tx
-                                                .send(WSMessage::Partial {
-                                                    text: delta,
-                                                    accumulated_text: current_clean,
-                                                    confidence: 0.95,
-                                                    timestamp: start_time.elapsed().as_secs_f64(),
-                                                })
-                                                .await;
+                                                let _ = tx
+                                                    .send(WSMessage::Partial {
+                                                        text: delta,
+                                                        accumulated_text: current_clean,
+                                                        confidence: 0.95,
+                                                        timestamp: start_time.elapsed().as_secs_f64(),
+                                                    })
+                                                    .await;
+                                            }
                                         }
+                                    }
+                                    Err(e) => {
+                                        let _ = tx
+                                            .send(WSMessage::Error {
+                                                message: format!("Nemotron inference error: {e}"),
+                                            })
+                                            .await;
                                     }
                                 }
                             }
                         }
-                    } else if message.is_close() {
-                        break;
                     }
                 }
                 Err(_) => break,

@@ -543,6 +543,30 @@
             }
         });
 
+        function downsampleTo16k(buffer, inputSampleRate) {
+            if (inputSampleRate === 16000) {
+                return buffer;
+            }
+            const ratio = inputSampleRate / 16000;
+            const newLength = Math.round(buffer.length / ratio);
+            const result = new Float32Array(newLength);
+            let offsetResult = 0;
+            let offsetBuffer = 0;
+            while (offsetResult < result.length) {
+                const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
+                let accum = 0;
+                let count = 0;
+                for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+                    accum += buffer[i];
+                    count++;
+                }
+                result[offsetResult] = count > 0 ? (accum / count) : buffer[offsetBuffer];
+                offsetResult++;
+                offsetBuffer = nextOffsetBuffer;
+            }
+            return result;
+        }
+
         function handleServerMessage(msg) {
             const transcriptBox = document.getElementById('transcriptBox');
             if (msg.type === 'ready') {
@@ -553,21 +577,12 @@
                     partialText.textContent = msg.text ? (' ' + msg.text.trim()) : '';
                 } else {
                     partialText.textContent = '';
-                    const current = confirmedText.textContent.trim();
-                    confirmedText.textContent = current ? (current + ' ' + msg.text.trim()) : msg.text.trim();
+                    const newText = msg.text ? msg.text.trim() : '';
+                    if (newText) {
+                        const current = confirmedText.textContent.trim();
+                        confirmedText.textContent = current ? (current + ' ' + newText) : newText;
+                    }
                 }
-                if (transcriptBox) transcriptBox.scrollTop = transcriptBox.scrollHeight;
-            } else if (msg.type === 'partial') {
-                placeholder.style.display = 'none';
-                // Display the active streaming utterance in real time
-                const activeText = msg.accumulated_text || msg.text;
-                partialText.textContent = activeText ? (' ' + activeText.trim()) : '';
-                if (transcriptBox) transcriptBox.scrollTop = transcriptBox.scrollHeight;
-            } else if (msg.type === 'final') {
-                placeholder.style.display = 'none';
-                partialText.textContent = '';
-                const current = confirmedText.textContent.trim();
-                confirmedText.textContent = current ? (current + ' ' + msg.text) : msg.text;
                 if (transcriptBox) transcriptBox.scrollTop = transcriptBox.scrollHeight;
             } else if (msg.type === 'error') {
                 console.error('Server error:', msg.message);
@@ -580,28 +595,38 @@
                 mediaStream = await navigator.mediaDevices.getUserMedia({
                     audio: {
                         channelCount: 1,
-                        sampleRate: 16000,
                         echoCancellation: true,
-                        noiseSuppression: true
+                        noiseSuppression: true,
+                        autoGainControl: true
                     }
                 });
 
-                audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-                const source = audioContext.createMediaStreamSource(mediaStream);
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const actualSampleRate = audioContext.sampleRate;
+                console.log(`AudioContext initialized at native sampleRate: ${actualSampleRate} Hz`);
 
+                const source = audioContext.createMediaStreamSource(mediaStream);
                 processor = audioContext.createScriptProcessor(4096, 1, 1);
                 source.connect(processor);
-                processor.connect(audioContext.destination);
+
+                // Mute destination to prevent mic-to-speaker feedback / echo loop
+                const muteNode = audioContext.createGain();
+                muteNode.gain.value = 0.0;
+                processor.connect(muteNode);
+                muteNode.connect(audioContext.destination);
 
                 processor.onaudioprocess = (e) => {
                     if (!isRecording) return;
                     const inputData = e.inputBuffer.getChannelData(0);
                     drawWaveform(inputData);
 
+                    // Downsample to 16,000 Hz if hardware is 44.1k/48k
+                    const resampled16k = downsampleTo16k(inputData, actualSampleRate);
+
                     // Convert float32 to int16 PCM
-                    const pcm16 = new Int16Array(inputData.length);
-                    for (let i = 0; i < inputData.length; i++) {
-                        const s = Math.max(-1, Math.min(1, inputData[i]));
+                    const pcm16 = new Int16Array(resampled16k.length);
+                    for (let i = 0; i < resampled16k.length; i++) {
+                        const s = Math.max(-1, Math.min(1, resampled16k[i]));
                         pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
                     }
 
