@@ -26,7 +26,10 @@ pub enum WSMessage {
         sample_rate: Option<u32>,
     },
     #[serde(rename = "reset")]
-    Reset,
+    Reset {
+        #[serde(default)]
+        finalize: Option<bool>,
+    },
     #[serde(rename = "end")]
     End,
     #[serde(rename = "flush")]
@@ -35,6 +38,8 @@ pub enum WSMessage {
     Transcript {
         text: String,
         is_final: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        finalize: Option<bool>,
     },
     #[serde(rename = "partial")]
     Partial {
@@ -128,6 +133,7 @@ impl WebSocketHandler {
         let mut audio_buffer: VecDeque<f32> = VecDeque::with_capacity(CHUNK_SIZE * 4);
         let mut accumulated_transcript = String::new();
         let mut last_emitted_text = String::new();
+        let mut last_emitted_final = String::new();
         let mut vad = EarshotVAD::new();
         let start_time = std::time::Instant::now();
 
@@ -239,15 +245,30 @@ impl WebSocketHandler {
                                 new_audio_received = true;
                             }
 
-                            WSMessage::Reset => {
-                                audio_buffer.clear();
-                                accumulated_transcript.clear();
-                                last_emitted_text.clear();
-                                if let Some(ref mut model) = nemotron_model {
-                                    model.reset();
+                            WSMessage::Reset { finalize } => {
+                                let should_finalize = finalize.unwrap_or(true);
+                                if !should_finalize {
+                                    // Soft reset (Modal pattern): return current text without clearing state
+                                    let current_clean = accumulated_transcript.trim().to_string();
+                                    let _ = tx
+                                        .send(WSMessage::Transcript {
+                                            text: current_clean,
+                                            is_final: true,
+                                            finalize: Some(false),
+                                        })
+                                        .await;
+                                } else {
+                                    // Hard reset: clear all buffers and reset model cache
+                                    audio_buffer.clear();
+                                    accumulated_transcript.clear();
+                                    last_emitted_text.clear();
+                                    last_emitted_final.clear();
+                                    if let Some(ref mut model) = nemotron_model {
+                                        model.reset();
+                                    }
+                                    vad.reset();
+                                    println!("WebSocket: Cache and Earshot VAD reset by client request");
                                 }
-                                vad.reset();
-                                println!("WebSocket: Cache and Earshot VAD reset by client request");
                             }
 
                             WSMessage::End | WSMessage::Flush => {
@@ -260,7 +281,7 @@ impl WebSocketHandler {
                                             accumulated_transcript.push_str(&delta);
                                         }
                                     }
-                                    // Flush trailing lookahead tokens
+                                    // Flush trailing lookahead tokens (right-context flush)
                                     let flush_chunk = vec![0.0f32; CHUNK_SIZE];
                                     for _ in 0..2 {
                                         if let Ok(delta) = model.transcribe_chunk(&flush_chunk) {
@@ -272,16 +293,35 @@ impl WebSocketHandler {
                                 let final_text =
                                     normalize_punctuation_spacing(accumulated_transcript.trim());
                                 if !final_text.is_empty() {
+                                    // Server-side deduplication (Modal pattern):
+                                    // Only emit the delta if final_text starts with last_emitted_final
+                                    let delta_text = if !last_emitted_final.is_empty()
+                                        && final_text.starts_with(&last_emitted_final)
+                                    {
+                                        final_text[last_emitted_final.len()..].trim().to_string()
+                                    } else {
+                                        final_text.clone()
+                                    };
+
+                                    let text_to_emit = if delta_text.is_empty() {
+                                        final_text.clone()
+                                    } else {
+                                        delta_text
+                                    };
+
+                                    last_emitted_final = final_text.clone();
+
                                     let _ = tx
                                         .send(WSMessage::Transcript {
-                                            text: final_text.clone(),
+                                            text: text_to_emit.clone(),
                                             is_final: true,
+                                            finalize: Some(true),
                                         })
                                         .await;
 
                                     let _ = tx
                                         .send(WSMessage::Final {
-                                            text: final_text,
+                                            text: text_to_emit,
                                             confidence: 0.95,
                                             timestamp: start_time.elapsed().as_secs_f64(),
                                             processing_time: start_time.elapsed().as_secs_f64(),
@@ -317,7 +357,7 @@ impl WebSocketHandler {
                         while audio_buffer.len() >= CHUNK_SIZE {
                             let chunk: Vec<f32> = audio_buffer.drain(..CHUNK_SIZE).collect();
 
-                            // Earshot Neural VAD processing
+                            // Earshot Neural VAD processing (observability events only; does not chop live ASR stream)
                             let vad_res = vad.process_chunk(&chunk);
                             match vad_res {
                                 VADResult::SpeechStarted => {
@@ -327,39 +367,12 @@ impl WebSocketHandler {
                                         })
                                         .await;
                                 }
-                                VADResult::EndOfUtterance { should_finalize, .. } => {
-                                    if should_finalize && !accumulated_transcript.trim().is_empty() {
-                                        let _ = tx
-                                            .send(WSMessage::SpeechEnded {
-                                                timestamp: start_time.elapsed().as_secs_f64(),
-                                            })
-                                            .await;
-
-                                        let final_text = normalize_punctuation_spacing(
-                                            accumulated_transcript.trim(),
-                                        );
-                                        if !final_text.is_empty() {
-                                            let _ = tx
-                                                .send(WSMessage::Transcript {
-                                                    text: final_text.clone(),
-                                                    is_final: true,
-                                                })
-                                                .await;
-
-                                            let _ = tx
-                                                .send(WSMessage::Final {
-                                                    text: final_text,
-                                                    confidence: 0.95,
-                                                    timestamp: start_time.elapsed().as_secs_f64(),
-                                                    processing_time: start_time.elapsed().as_secs_f64(),
-                                                })
-                                                .await;
-                                        }
-
-                                        vad.reset();
-                                        accumulated_transcript.clear();
-                                        last_emitted_text.clear();
-                                    }
+                                VADResult::EndOfUtterance { .. } => {
+                                    let _ = tx
+                                        .send(WSMessage::SpeechEnded {
+                                            timestamp: start_time.elapsed().as_secs_f64(),
+                                        })
+                                        .await;
                                 }
                                 _ => {}
                             }
