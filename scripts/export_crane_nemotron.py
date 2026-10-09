@@ -29,7 +29,11 @@ import torch
 from omegaconf import OmegaConf
 
 import nemo.collections.asr as nemo_asr
-from nemo.collections.asr.parts.utils.streaming_utils import CacheAwareStreamingAudioBuffer
+
+try:
+    from nemo.collections.asr.parts.utils.streaming_utils import CacheAwareStreamingAudioBuffer
+except (ImportError, SyntaxError):
+    CacheAwareStreamingAudioBuffer = None
 
 
 def parse_args():
@@ -214,22 +218,32 @@ def main():
     hidden_dim = cache_last_channel.shape[3]
     conv_context = cache_last_time.shape[3]
 
-    # Sample mel features via streaming buffer
+    # Sample mel features via streaming buffer or preprocessor
     print("\nGenerating sample mel features...")
-    streaming_buffer = CacheAwareStreamingAudioBuffer(
-        model=model,
-        online_normalization=False,
-        pad_and_drop_preencoded=True,
-    )
-    sample_rate = 16000
-    dummy_audio = np.random.randn(sample_rate * 2).astype(np.float32) * 0.1
-    temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
-    sf.write(temp_wav.name, dummy_audio, sample_rate)
-    temp_wav.close()
+    if CacheAwareStreamingAudioBuffer is not None:
+        streaming_buffer = CacheAwareStreamingAudioBuffer(
+            model=model,
+            online_normalization=False,
+            pad_and_drop_preencoded=True,
+        )
+        sample_rate = 16000
+        dummy_audio = np.random.randn(sample_rate * 2).astype(np.float32) * 0.1
+        temp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        sf.write(temp_wav.name, dummy_audio, sample_rate)
+        temp_wav.close()
 
-    streaming_buffer.append_audio_file(temp_wav.name, stream_id=-1)
-    processed_signal, processed_signal_length = next(iter(streaming_buffer))
-    os.unlink(temp_wav.name)
+        streaming_buffer.append_audio_file(temp_wav.name, stream_id=-1)
+        processed_signal, processed_signal_length = next(iter(streaming_buffer))
+        os.unlink(temp_wav.name)
+    else:
+        # Fallback for Python versions where streaming_utils cannot be imported
+        dummy_audio = torch.randn(1, 16000 * 2, dtype=torch.float32) * 0.05
+        dummy_len = torch.tensor([16000 * 2], dtype=torch.long)
+        with torch.no_grad():
+            mel_all, _ = model.preprocessor(input_signal=dummy_audio, length=dummy_len)
+        num_frames = (chunk_size + drop_extra_pre_encoded) * subsampling_factor
+        processed_signal = mel_all[:, :, :num_frames]
+        processed_signal_length = torch.tensor([num_frames], dtype=torch.long)
 
     # Prompt dictionary
     prompt_dict = OmegaConf.to_container(

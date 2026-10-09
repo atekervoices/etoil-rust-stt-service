@@ -6,7 +6,7 @@
 # ------------------------------------------------------------------------------
 # Stage 1: Model Downloader & ONNX Exporter
 # ------------------------------------------------------------------------------
-FROM python:3.10-slim AS model-exporter
+FROM python:3.11-slim AS model-exporter
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
