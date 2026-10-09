@@ -547,6 +547,16 @@
             const transcriptBox = document.getElementById('transcriptBox');
             if (msg.type === 'ready') {
                 console.log('Model ready:', msg);
+            } else if (msg.type === 'transcript') {
+                placeholder.style.display = 'none';
+                if (!msg.is_final) {
+                    partialText.textContent = msg.text ? (' ' + msg.text.trim()) : '';
+                } else {
+                    partialText.textContent = '';
+                    const current = confirmedText.textContent.trim();
+                    confirmedText.textContent = current ? (current + ' ' + msg.text.trim()) : msg.text.trim();
+                }
+                if (transcriptBox) transcriptBox.scrollTop = transcriptBox.scrollHeight;
             } else if (msg.type === 'partial') {
                 placeholder.style.display = 'none';
                 // Display the active streaming utterance in real time
@@ -595,20 +605,9 @@
                         pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
                     }
 
-                    // Base64 encode and stream to server
-                    const bytes = new Uint8Array(pcm16.buffer);
-                    let binary = '';
-                    for (let i = 0; i < bytes.byteLength; i++) {
-                        binary += String.fromCharCode(bytes[i]);
-                    }
-                    const base64Audio = btoa(binary);
-
+                    // Direct binary PCM streaming to server (zero base64 overhead)
                     if (ws && ws.readyState === WebSocket.OPEN) {
-                        ws.send(JSON.stringify({
-                            type: 'audio',
-                            data: base64Audio,
-                            sample_rate: 16000
-                        }));
+                        ws.send(pcm16.buffer);
                     }
                 };
 
