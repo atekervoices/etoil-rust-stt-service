@@ -21,8 +21,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /export
 
-# Install lightweight CPU PyTorch (exporting FastConformer graph is done on CPU)
-RUN pip install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+# Upgrade pip and install wheel/setuptools build tools
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# Install lightweight CPU PyTorch using --extra-index-url (allows PyPI dependencies like flit_core to resolve)
+RUN pip install --no-cache-dir torch torchaudio --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Install export requirements and NeMo toolkit
 RUN pip install --no-cache-dir \
