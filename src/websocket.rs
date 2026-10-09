@@ -139,7 +139,7 @@ impl WebSocketHandler {
                     .await;
                 return;
             }
-        }
+        };
 
         while let Some(msg) = ws_rx.next().await {
             match msg {

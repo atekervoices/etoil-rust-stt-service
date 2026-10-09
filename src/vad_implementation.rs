@@ -64,7 +64,7 @@ impl EarshotVAD {
         // Process in 256-sample frames (16ms @ 16kHz)
         for frame in chunk.chunks_exact(EARSHOT_FRAME_SIZE) {
             let score = self.detector.predict_f32(frame);
-            let is_voice = score.is_voice();
+            let is_voice = score >= 0.5;
 
             if is_voice {
                 self.speech_frames += 1;
