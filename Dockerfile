@@ -86,7 +86,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3t64 \
-    libasound2 \
+    libasound2t64 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
