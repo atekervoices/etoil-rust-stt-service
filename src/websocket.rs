@@ -246,7 +246,19 @@ impl WebSocketHandler {
                                         VADResult::EndOfUtterance {
                                             should_finalize, ..
                                         } => {
-                                            if should_finalize {
+                                            if should_finalize && !accumulated_transcript.trim().is_empty() {
+                                                // Flush 2 zero-chunks through Nemotron to emit any trailing lookahead tokens
+                                                if let Some(ref mut model) = nemotron_model {
+                                                    let flush_chunk = vec![0.0f32; CHUNK_SIZE];
+                                                    for _ in 0..2 {
+                                                        if let Ok(flush_delta) = model.transcribe_chunk(&flush_chunk) {
+                                                            if !flush_delta.is_empty() {
+                                                                accumulated_transcript.push_str(&flush_delta);
+                                                            }
+                                                        }
+                                                    }
+                                                }
+
                                                 let _ = tx
                                                     .send(WSMessage::SpeechEnded {
                                                         timestamp: start_time
@@ -273,10 +285,6 @@ impl WebSocketHandler {
                                                         .await;
                                                 }
 
-                                                // Reset Nemotron cache and Earshot internal state for next utterance
-                                                if let Some(ref mut model) = nemotron_model {
-                                                    model.reset();
-                                                }
                                                 vad.reset();
                                                 accumulated_transcript.clear();
                                             }
@@ -288,31 +296,22 @@ impl WebSocketHandler {
                                     if let Some(ref mut model) = nemotron_model {
                                         match model.transcribe_chunk(&chunk) {
                                             Ok(delta) => {
-                                                if !delta.trim().is_empty() {
-                                                    let delta_norm =
-                                                        normalize_punctuation_spacing(delta.trim());
-                                                    if !delta_norm.is_empty() {
-                                                        if !accumulated_transcript.is_empty()
-                                                            && !accumulated_transcript
-                                                                .ends_with(' ')
-                                                        {
-                                                            accumulated_transcript.push(' ');
-                                                        }
-                                                        accumulated_transcript
-                                                            .push_str(&delta_norm);
+                                                if !delta.is_empty() {
+                                                    // SentencePiece naturally includes leading whitespace on new words.
+                                                    // Appending verbatim preserves whole words instead of breaking subwords.
+                                                    accumulated_transcript.push_str(&delta);
 
-                                                        let _ = tx
-                                                            .send(WSMessage::Partial {
-                                                                text: delta_norm,
-                                                                accumulated_text:
-                                                                    accumulated_transcript.clone(),
-                                                                confidence: 0.92,
-                                                                timestamp: start_time
-                                                                    .elapsed()
-                                                                    .as_secs_f64(),
-                                                            })
-                                                            .await;
-                                                    }
+                                                    let _ = tx
+                                                        .send(WSMessage::Partial {
+                                                            text: delta,
+                                                            accumulated_text:
+                                                                accumulated_transcript.clone(),
+                                                            confidence: 0.95,
+                                                            timestamp: start_time
+                                                                .elapsed()
+                                                                .as_secs_f64(),
+                                                        })
+                                                        .await;
                                                 }
                                             }
                                             Err(e) => {
@@ -340,23 +339,20 @@ impl WebSocketHandler {
                             }
 
                             WSMessage::Flush => {
-                                // Pad remaining buffer with zeros to CHUNK_SIZE if any audio exists
-                                if !audio_buffer.is_empty() {
-                                    let mut final_chunk: Vec<f32> = audio_buffer.drain(..).collect();
-                                    final_chunk.resize(CHUNK_SIZE, 0.0);
-
-                                    if let Some(ref mut model) = nemotron_model {
+                                if let Some(ref mut model) = nemotron_model {
+                                    // Process any remaining audio in the buffer
+                                    if !audio_buffer.is_empty() {
+                                        let mut final_chunk: Vec<f32> = audio_buffer.drain(..).collect();
+                                        final_chunk.resize(CHUNK_SIZE, 0.0);
                                         if let Ok(delta) = model.transcribe_chunk(&final_chunk) {
-                                            let delta_norm =
-                                                normalize_punctuation_spacing(delta.trim());
-                                            if !delta_norm.is_empty() {
-                                                if !accumulated_transcript.is_empty()
-                                                    && !accumulated_transcript.ends_with(' ')
-                                                {
-                                                    accumulated_transcript.push(' ');
-                                                }
-                                                accumulated_transcript.push_str(&delta_norm);
-                                            }
+                                            accumulated_transcript.push_str(&delta);
+                                        }
+                                    }
+                                    // Flush trailing lookahead tokens
+                                    let flush_chunk = vec![0.0f32; CHUNK_SIZE];
+                                    for _ in 0..2 {
+                                        if let Ok(delta) = model.transcribe_chunk(&flush_chunk) {
+                                            accumulated_transcript.push_str(&delta);
                                         }
                                     }
                                 }
@@ -373,6 +369,7 @@ impl WebSocketHandler {
                                         })
                                         .await;
                                 }
+                                accumulated_transcript.clear();
 
                                 if let Some(ref mut model) = nemotron_model {
                                     model.reset();

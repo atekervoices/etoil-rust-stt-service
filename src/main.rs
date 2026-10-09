@@ -103,15 +103,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         };
 
         let text = model.transcribe_chunk(&chunk_data)?;
-        if !text.trim().is_empty() {
-            let norm = normalize_punctuation_spacing(text.trim());
-            print!("{norm} ");
+        if !text.is_empty() {
+            print!("{text}");
             std::io::Write::flush(&mut std::io::stdout())?;
+            full_transcript.push_str(&text);
+        }
+    }
 
-            if !full_transcript.is_empty() && !full_transcript.ends_with(' ') {
-                full_transcript.push(' ');
+    // Flush lookahead
+    let flush_chunk = vec![0.0f32; CHUNK_SIZE];
+    for _ in 0..3 {
+        if let Ok(text) = model.transcribe_chunk(&flush_chunk) {
+            if !text.is_empty() {
+                print!("{text}");
+                std::io::Write::flush(&mut std::io::stdout())?;
+                full_transcript.push_str(&text);
             }
-            full_transcript.push_str(&norm);
         }
     }
 

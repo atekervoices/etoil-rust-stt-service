@@ -349,11 +349,18 @@ impl NemotronService {
             };
 
             let delta = model.transcribe_chunk(&chunk_data)?;
-            if !delta.trim().is_empty() {
-                if !full_text.is_empty() && !full_text.ends_with(' ') {
-                    full_text.push(' ');
+            if !delta.is_empty() {
+                full_text.push_str(&delta);
+            }
+        }
+
+        // Flush 3 chunks to release lookahead tokens from RNNT joint network
+        let flush_chunk = vec![0.0f32; CHUNK_SIZE];
+        for _ in 0..3 {
+            if let Ok(flush_delta) = model.transcribe_chunk(&flush_chunk) {
+                if !flush_delta.is_empty() {
+                    full_text.push_str(&flush_delta);
                 }
-                full_text.push_str(delta.trim());
             }
         }
 

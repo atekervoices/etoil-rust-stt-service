@@ -34,7 +34,7 @@ impl EarshotVAD {
             in_utterance: false,
             silence_frames: 0,
             speech_frames: 0,
-            silence_hangover_frames: 18, // ~288ms of silence
+            silence_hangover_frames: 75, // ~1200ms of silence for natural conversational pauses
             min_speech_frames: 2,        // ~32ms of speech
             total_speech_frames_in_utterance: 0,
         }

@@ -150,12 +150,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             match model.transcribe_chunk(&chunk) {
                 Ok(delta) => {
-                    if !delta.trim().is_empty() {
-                        let delta_norm = normalize_punctuation_spacing(delta.trim());
-                        print!("{delta_norm} ");
+                    if !delta.is_empty() {
+                        print!("{delta}");
                         std::io::stdout().flush()?;
-                        current_utterance.push_str(&delta_norm);
-                        current_utterance.push(' ');
+                        current_utterance.push_str(&delta);
                     }
                 }
                 Err(e) => {

@@ -544,16 +544,21 @@
         });
 
         function handleServerMessage(msg) {
+            const transcriptBox = document.getElementById('transcriptBox');
             if (msg.type === 'ready') {
                 console.log('Model ready:', msg);
             } else if (msg.type === 'partial') {
                 placeholder.style.display = 'none';
-                partialText.textContent = ' ' + msg.text;
+                // Display the active streaming utterance in real time
+                const activeText = msg.accumulated_text || msg.text;
+                partialText.textContent = activeText ? (' ' + activeText.trim()) : '';
+                if (transcriptBox) transcriptBox.scrollTop = transcriptBox.scrollHeight;
             } else if (msg.type === 'final') {
                 placeholder.style.display = 'none';
                 partialText.textContent = '';
                 const current = confirmedText.textContent.trim();
                 confirmedText.textContent = current ? (current + ' ' + msg.text) : msg.text;
+                if (transcriptBox) transcriptBox.scrollTop = transcriptBox.scrollHeight;
             } else if (msg.type === 'error') {
                 console.error('Server error:', msg.message);
                 alert('STT Server error: ' + msg.message);
