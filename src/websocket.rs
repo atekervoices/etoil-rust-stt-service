@@ -8,7 +8,7 @@ use tokio::sync::mpsc;
 use warp::ws::{Message as WarpMessage, WebSocket};
 
 use crate::language::{CHUNK_SIZE, SupportedLanguage};
-use crate::vad_implementation::{normalize_punctuation_spacing, EarshotVAD, VADResult};
+use crate::vad_implementation::normalize_punctuation_spacing;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type")]
@@ -100,7 +100,7 @@ impl WebSocketHandler {
         // Send ready message on connection
         let ready_msg = WSMessage::Ready {
             model: "CraneAILabs/crane-nemo-asr-1.1 (Nemotron 3.5 Streaming)".to_string(),
-            vad_engine: "Earshot (pyke.io, 3,600x RTF neural VAD)".to_string(),
+            vad_engine: "None (Native Transducer Streaming)".to_string(),
             supported_languages: vec![
                 "lg (Luganda)".to_string(),
                 "en (English)".to_string(),
@@ -134,7 +134,6 @@ impl WebSocketHandler {
         let mut accumulated_transcript = String::new();
         let mut last_emitted_text = String::new();
         let mut last_emitted_final = String::new();
-        let mut vad = EarshotVAD::new();
         let start_time = std::time::Instant::now();
 
         // Load default model session
@@ -266,8 +265,7 @@ impl WebSocketHandler {
                                     if let Some(ref mut model) = nemotron_model {
                                         model.reset();
                                     }
-                                    vad.reset();
-                                    println!("WebSocket: Cache and Earshot VAD reset by client request");
+                                    println!("WebSocket: Model cache reset by client request");
                                 }
                             }
 
@@ -334,7 +332,6 @@ impl WebSocketHandler {
                                 if let Some(ref mut model) = nemotron_model {
                                     model.reset();
                                 }
-                                vad.reset();
                             }
 
                             _ => {}
@@ -357,27 +354,7 @@ impl WebSocketHandler {
                         while audio_buffer.len() >= CHUNK_SIZE {
                             let chunk: Vec<f32> = audio_buffer.drain(..CHUNK_SIZE).collect();
 
-                            // Earshot Neural VAD processing (observability events only; does not chop live ASR stream)
-                            let vad_res = vad.process_chunk(&chunk);
-                            match vad_res {
-                                VADResult::SpeechStarted => {
-                                    let _ = tx
-                                        .send(WSMessage::SpeechStarted {
-                                            timestamp: start_time.elapsed().as_secs_f64(),
-                                        })
-                                        .await;
-                                }
-                                VADResult::EndOfUtterance { .. } => {
-                                    let _ = tx
-                                        .send(WSMessage::SpeechEnded {
-                                            timestamp: start_time.elapsed().as_secs_f64(),
-                                        })
-                                        .await;
-                                }
-                                _ => {}
-                            }
-
-                            // Continuous stateful Nemotron streaming (cache preserved across pauses)
+                            // Continuous stateful Nemotron streaming (native blank transducer)
                             if let Some(ref mut model) = nemotron_model {
                                 match model.transcribe_chunk(&chunk) {
                                     Ok(delta) => {
