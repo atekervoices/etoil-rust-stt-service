@@ -65,17 +65,50 @@ def export_model(input_path, output_dir, left_context=56, right_context=6):
 
     # 1. Extract Tokenizer model (SentencePiece protobuf)
     print("\n[1/4] Extracting tokenizer.model...")
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    tokenizer_dest = os.path.join(output_dir, "tokenizer.model")
+    extracted = False
+
+    # Method A: Search .nemo tar archive for any .model file
+    try:
         with tarfile.open(input_path, "r") as tar:
-            tar.extractall(path=tmp_dir)
-        tokenizer_src = os.path.join(tmp_dir, "tokenizer.model")
-        tokenizer_dest = os.path.join(output_dir, "tokenizer.model")
-        if os.path.exists(tokenizer_src):
-            shutil.copy2(tokenizer_src, tokenizer_dest)
-            print(f"  Saved {tokenizer_dest}")
-        else:
-            print("  Extracting SentencePiece model directly from tokenizer object...")
-            model.tokenizer.save_vocab(os.path.join(output_dir, "vocab.txt"))
+            for member in tar.getmembers():
+                if member.name.endswith(".model") or "tokenizer" in member.name:
+                    print(f"  Found tokenizer archive member: {member.name}")
+                    f = tar.extractfile(member)
+                    if f is not None:
+                        with open(tokenizer_dest, "wb") as out_f:
+                            out_f.write(f.read())
+                        extracted = True
+                        print(f"  Saved {tokenizer_dest} (from archive member)")
+                        break
+    except Exception as e:
+        print(f"  Archive scan note: {e}")
+
+    # Method B: Direct serialization from SentencePieceProcessor
+    if not extracted:
+        try:
+            sp_proc = getattr(model.tokenizer, "tokenizer", model.tokenizer)
+            if hasattr(sp_proc, "serialized_model_proto"):
+                proto = sp_proc.serialized_model_proto()
+                with open(tokenizer_dest, "wb") as out_f:
+                    out_f.write(proto)
+                extracted = True
+                print(f"  Saved {tokenizer_dest} (via serialized_model_proto)")
+        except Exception as e:
+            print(f"  serialized_model_proto note: {e}")
+
+    # Method C: Check tokenizer path attributes
+    if not extracted:
+        for attr in ["model_path", "tokenizer_file", "model"]:
+            path_val = getattr(model.tokenizer, attr, None)
+            if isinstance(path_val, str) and os.path.exists(path_val):
+                shutil.copy2(path_val, tokenizer_dest)
+                extracted = True
+                print(f"  Saved {tokenizer_dest} (copied from {path_val})")
+                break
+
+    if not extracted:
+        raise RuntimeError(f"Could not extract tokenizer.model from {input_path}")
 
     # 2. Export Decoder + Joint Network
     print("\n[2/4] Exporting decoder_joint.onnx...")
