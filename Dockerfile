@@ -45,8 +45,8 @@ COPY scripts/export_nemotron.py /export/export_nemotron.py
 # Download original NVIDIA Nemotron model (.nemo) from Hugging Face
 RUN python3 /export/download_model.py --output-dir /export/models
 
-# Export original NVIDIA .nemo to parakeet-rs ONNX format
-RUN python3 /export/export_nemotron.py /export/models/nemotron-3.5-asr-streaming-0.6b.nemo /export/nemotron-3.5-asr-streaming-0.6b-onnx
+# Export original NVIDIA .nemo to parakeet-rs ONNX format with 160ms streaming (right-context=1)
+RUN python3 /export/export_nemotron.py /export/models/nemotron-3.5-asr-streaming-0.6b.nemo /export/nemotron-3.5-asr-streaming-0.6b-onnx --right-context 1
 
 # Clean up raw .nemo checkpoint to minimize disk usage
 RUN rm -rf /export/models
@@ -80,9 +80,9 @@ COPY . .
 RUN cargo build --release --features cuda --bin api_server
 
 # ------------------------------------------------------------------------------
-# Stage 3: Minimal Production Runtime (GPU / CUDA)
+# Stage 3: Minimal Production Runtime (GPU / CUDA 12.6 + cuDNN)
 # ------------------------------------------------------------------------------
-FROM nvidia/cuda:12.6.3-runtime-ubuntu24.04
+FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 

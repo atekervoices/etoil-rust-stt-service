@@ -147,12 +147,17 @@ impl WebSocketHandler {
         let mut silent_chunks_count: usize = 0;
         let start_time = std::time::Instant::now();
 
-        // Load default model session
-        let mut nemotron_model = match Nemotron::from_pretrained(self.model_path.as_str(), None) {
+        // Load model session with CUDA acceleration if enabled
+        let exec_config = crate::server::create_execution_config();
+        let mut nemotron_model = match Nemotron::from_pretrained(self.model_path.as_str(), exec_config) {
             Ok(mut model) => {
                 if model.mode() == NemotronMode::Multilingual {
                     let _ = model.set_target_lang(active_language.to_nemotron_lang());
                 }
+                // Pre-warm instance
+                let dummy = vec![0.0f32; CHUNK_SIZE];
+                let _ = model.transcribe_chunk(&dummy);
+                model.reset();
                 Some(model)
             }
             Err(e) => {
@@ -401,8 +406,8 @@ impl WebSocketHandler {
                                             // Silence chunk: check for sentence boundary pause
                                             if !accumulated_transcript.is_empty() {
                                                 silent_chunks_count += 1;
-                                                // After ~1.1s (2 chunks) of pause after speech, finalize sentence
-                                                if silent_chunks_count >= 2 {
+                                                // After ~800ms (5 chunks of 160ms) of pause after speech, finalize sentence
+                                                if silent_chunks_count >= 5 {
                                                     // Flush trailing lookahead tokens
                                                     let flush_chunk = vec![0.0f32; CHUNK_SIZE];
                                                     if let Ok(flush_delta) = model.transcribe_chunk(&flush_chunk) {

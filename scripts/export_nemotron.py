@@ -100,8 +100,8 @@ parser.add_argument(
     help="Attention left context (default: 56 -- the only value this model supports)",
 )
 parser.add_argument(
-    "--right-context", type=int, default=6,
-    help="Attention right context (default: 6; valid values per model card are 0, 3, 6, 13)",
+    "--right-context", type=int, default=1,
+    help="Attention right context (default: 1 for ~160ms low latency; valid values per model card are 0, 1, 3, 6, 13)",
 )
 parser.add_argument(
     "--verify-langs", default="en-US,es-ES,ja-JP",

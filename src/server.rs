@@ -330,6 +330,19 @@ async fn transcribe_explicit_batch_handler(
     }
 }
 
+pub fn create_execution_config() -> Option<parakeet_rs::ExecutionConfig> {
+    #[cfg(feature = "cuda")]
+    {
+        println!("Execution backend: CUDA GPU Acceleration (ExecutionProvider::Cuda)");
+        Some(parakeet_rs::ExecutionConfig::new().with_execution_provider(parakeet_rs::ExecutionProvider::Cuda))
+    }
+    #[cfg(not(feature = "cuda"))]
+    {
+        println!("Execution backend: CPU (ExecutionProvider::Cpu)");
+        None
+    }
+}
+
 pub struct NemotronService {
     pub model_path: Arc<String>,
     shared_model: Arc<Mutex<Nemotron>>,
@@ -339,11 +352,19 @@ impl NemotronService {
     pub async fn new(model_path: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         println!("Loading NVIDIA Nemotron model from: {model_path}");
 
-        let model = Nemotron::from_pretrained(model_path, None)?;
+        let exec_config = create_execution_config();
+        let mut model = Nemotron::from_pretrained(model_path, exec_config)?;
         println!(
             "NVIDIA Nemotron model loaded successfully! Mode: {:?}",
             model.mode()
         );
+
+        // Pre-warm model to compile CUDA kernels and claim GPU memory
+        println!("Pre-warming model to allocate GPU memory pools and compile kernels...");
+        let dummy_chunk = vec![0.0f32; CHUNK_SIZE];
+        let _ = model.transcribe_chunk(&dummy_chunk);
+        model.reset();
+        println!("Warmup complete - ready for streaming!");
 
         Ok(Self {
             model_path: Arc::new(model_path.to_string()),

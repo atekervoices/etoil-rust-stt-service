@@ -52,9 +52,9 @@
 
         <div>
             <p>
-                <strong>Chunk Size:</strong> 560 ms | 
+                <strong>Chunk Size:</strong> 160 ms | 
                 <strong>Sample Rate:</strong> 16,000 Hz | 
-                <strong>Samples / Chunk:</strong> 8,960 | 
+                <strong>Samples / Chunk:</strong> 2,560 | 
                 <strong>Active Language:</strong> <span id="activeLangDisplay">en-gb</span>
             </p>
         </div>
@@ -88,7 +88,7 @@
         let processor = null;
         let isRecording = false;
 
-        const CHUNK_SIZE = 8960; // 560ms at 16kHz
+        const CHUNK_SIZE = 2560; // 160ms at 16kHz
 
         function connectWebSocket() {
             const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
