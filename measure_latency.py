@@ -139,6 +139,15 @@ def test_realtime_websocket(pcm16, audio_duration):
             raw_msg = ws.recv()
             t_recv = time.perf_counter()
             msg = json.loads(raw_msg)
+            elapsed = (t_recv - t_stream_start) * 1000
+            if msg.get("type") in ("transcript", "partial") and msg.get("text"):
+                text = msg.get("text").strip()
+                if first_token_latency_ms is None:
+                    first_token_latency_ms = elapsed
+                    print(f" >>> TTFT: {first_token_latency_ms:.1f} ms from stream start")
+                    print(f"     First Partial: \"{text}\"")
+                else:
+                    print(f" Step @ +{elapsed:.0f}ms: \"{text}\"")
             if msg.get("type") == "final" or (msg.get("type") == "transcript" and msg.get("is_final")):
                 ttff_ms = (t_recv - t_flush) * 1000
                 final_text = msg.get("text")

@@ -347,7 +347,7 @@ pub fn create_execution_config() -> Option<parakeet_rs::ExecutionConfig> {
 
 pub struct NemotronService {
     pub model_path: Arc<String>,
-    shared_model: Arc<Mutex<Nemotron>>,
+    pub shared_model: Arc<Mutex<Nemotron>>,
 }
 
 impl NemotronService {

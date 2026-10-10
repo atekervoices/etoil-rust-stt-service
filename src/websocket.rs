@@ -1,6 +1,6 @@
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
-use parakeet_rs::{Nemotron, NemotronMode};
+use parakeet_rs::NemotronMode;
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -282,14 +282,16 @@ impl WebSocketHandler {
                                     if !audio_buffer.is_empty() {
                                         let mut final_chunk: Vec<f32> = audio_buffer.drain(..).collect();
                                         final_chunk.resize(CHUNK_SIZE, 0.0);
-                                        if let Ok(delta) = model.transcribe_chunk(&final_chunk) {
+                                        let delta_res: Result<String, _> = model.transcribe_chunk(&final_chunk);
+                                        if let Ok(delta) = delta_res {
                                             accumulated_transcript.push_str(&delta);
                                         }
                                     }
                                     // Flush trailing lookahead tokens (right-context flush)
                                     let flush_chunk = vec![0.0f32; CHUNK_SIZE];
                                     for _ in 0..2 {
-                                        if let Ok(delta) = model.transcribe_chunk(&flush_chunk) {
+                                        let delta_res: Result<String, _> = model.transcribe_chunk(&flush_chunk);
+                                        if let Ok(delta) = delta_res {
                                             accumulated_transcript.push_str(&delta);
                                         }
                                     }
@@ -407,7 +409,8 @@ impl WebSocketHandler {
                                                 // Flush trailing lookahead tokens
                                                 let mut model = self.service.shared_model.lock().await;
                                                 let flush_chunk = vec![0.0f32; CHUNK_SIZE];
-                                                if let Ok(flush_delta) = model.transcribe_chunk(&flush_chunk) {
+                                                let delta_res: Result<String, _> = model.transcribe_chunk(&flush_chunk);
+                                                if let Ok(flush_delta) = delta_res {
                                                     if !flush_delta.is_empty() {
                                                         accumulated_transcript.push_str(&flush_delta);
                                                     }
