@@ -63,7 +63,7 @@ impl SupportedLanguage {
             "en" | "eng" | "english" | "en-us" | "en_us" | "us" | "american" => {
                 Ok(SupportedLanguage::English)
             }
-            "en-gb" | "eng-gb" | "en_gb" | "uk" | "british" | "commonwealth" => {
+            "en-gb" | "eng-gb" | "en_gb" | "british" | "commonwealth" => {
                 Ok(SupportedLanguage::EnglishGB)
             }
             "es" | "spa" | "spanish" | "es-es" | "es_es" => Ok(SupportedLanguage::Spanish),

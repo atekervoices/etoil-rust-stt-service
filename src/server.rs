@@ -425,7 +425,7 @@ impl NemotronService {
 
         for file in request.files {
             let file_start = Instant::now();
-            match self.transcribe_audio_bytes(&file.data, language).await {
+            match self.transcribe_audio_bytes(&file.data, language.clone()).await {
                 Ok(resp) => {
                     successful_files += 1;
                     results.push(BatchTranscriptionResult {
