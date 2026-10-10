@@ -81,6 +81,7 @@ RUN cargo build --release --features cuda --bin api_server
 
 # Collect any dynamic shared libraries (.so) produced by ort into /app/dist_libs
 RUN mkdir -p /app/dist_libs && \
+    touch /app/dist_libs/.keep && \
     find /app/target/release -name "*.so*" -exec cp {} /app/dist_libs/ \; 2>/dev/null || true
 
 # ------------------------------------------------------------------------------
