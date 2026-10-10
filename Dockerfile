@@ -57,6 +57,7 @@ RUN rm -rf /export/models
 FROM ubuntu:24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV ORT_CUDA_VERSION=12
 
 RUN apt-get update && apt-get install -y \
     curl \
@@ -93,6 +94,7 @@ FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+ENV ORT_CUDA_VERSION=12
 ENV LD_LIBRARY_PATH=/app:/usr/local/cuda/lib64:/usr/local/cuda/compat:/usr/local/lib:${LD_LIBRARY_PATH}
 
 # Install runtime dependencies (no Python or build toolchains in final image!)

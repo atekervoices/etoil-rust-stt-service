@@ -17,6 +17,7 @@ services:
       - PORT=8099
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - ORT_CUDA_VERSION=12
       - LD_LIBRARY_PATH=/app:/usr/local/cuda/lib64:/usr/local/cuda/compat:/usr/local/lib
     # GPU support (requires NVIDIA Container Toolkit)
     deploy:
