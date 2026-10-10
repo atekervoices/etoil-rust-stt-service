@@ -132,6 +132,7 @@ impl WebSocketHandler {
         let mut accumulated_transcript = String::new();
         let mut last_emitted_text = String::new();
         let mut last_emitted_final = String::new();
+        let mut silent_chunks_count: usize = 0;
         let start_time = std::time::Instant::now();
 
         // Load default model session
@@ -260,6 +261,7 @@ impl WebSocketHandler {
                                     accumulated_transcript.clear();
                                     last_emitted_text.clear();
                                     last_emitted_final.clear();
+                                    silent_chunks_count = 0;
                                     if let Some(ref mut model) = nemotron_model {
                                         model.reset();
                                     }
@@ -327,6 +329,7 @@ impl WebSocketHandler {
                                 audio_buffer.clear();
                                 accumulated_transcript.clear();
                                 last_emitted_text.clear();
+                                silent_chunks_count = 0;
                                 if let Some(ref mut model) = nemotron_model {
                                     model.reset();
                                 }
@@ -357,6 +360,7 @@ impl WebSocketHandler {
                                 match model.transcribe_chunk(&chunk) {
                                     Ok(delta) => {
                                         if !delta.is_empty() {
+                                            silent_chunks_count = 0;
                                             accumulated_transcript.push_str(&delta);
 
                                             let current_clean = accumulated_transcript.trim().to_string();
@@ -380,6 +384,47 @@ impl WebSocketHandler {
                                                         timestamp: start_time.elapsed().as_secs_f64(),
                                                     })
                                                     .await;
+                                            }
+                                        } else {
+                                            // Silence chunk: check for sentence boundary pause
+                                            if !accumulated_transcript.is_empty() {
+                                                silent_chunks_count += 1;
+                                                // After ~1.1s (2 chunks) of pause after speech, finalize sentence
+                                                if silent_chunks_count >= 2 {
+                                                    // Flush trailing lookahead tokens
+                                                    let flush_chunk = vec![0.0f32; CHUNK_SIZE];
+                                                    if let Ok(flush_delta) = model.transcribe_chunk(&flush_chunk) {
+                                                        if !flush_delta.is_empty() {
+                                                            accumulated_transcript.push_str(&flush_delta);
+                                                        }
+                                                    }
+
+                                                    let final_sentence = accumulated_transcript.trim().to_string();
+                                                    if !final_sentence.is_empty() {
+                                                        println!("[Sentence | {}] {}", active_language.code(), final_sentence);
+                                                        let _ = tx
+                                                            .send(WSMessage::Transcript {
+                                                                text: final_sentence.clone(),
+                                                                is_final: true,
+                                                                finalize: Some(true),
+                                                            })
+                                                            .await;
+
+                                                        let _ = tx
+                                                            .send(WSMessage::Final {
+                                                                text: final_sentence,
+                                                                confidence: 0.95,
+                                                                timestamp: start_time.elapsed().as_secs_f64(),
+                                                                processing_time: start_time.elapsed().as_secs_f64(),
+                                                            })
+                                                            .await;
+                                                    }
+
+                                                    accumulated_transcript.clear();
+                                                    last_emitted_text.clear();
+                                                    silent_chunks_count = 0;
+                                                    model.reset();
+                                                }
                                             }
                                         }
                                     }

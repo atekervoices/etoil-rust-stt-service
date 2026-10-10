@@ -95,6 +95,24 @@ async fn health_check() -> impl warp::Reply {
     })
 }
 
+fn resample_to_16k(samples: &[f32], src_rate: u32) -> Vec<f32> {
+    if src_rate == 16000 || samples.is_empty() {
+        return samples.to_vec();
+    }
+    let ratio = src_rate as f64 / 16000.0;
+    let target_len = (samples.len() as f64 / ratio).round() as usize;
+    let mut resampled = Vec::with_capacity(target_len);
+    for i in 0..target_len {
+        let src_idx = i as f64 * ratio;
+        let idx0 = src_idx.floor() as usize;
+        let frac = (src_idx - idx0 as f64) as f32;
+        let s0 = samples.get(idx0).copied().unwrap_or(0.0);
+        let s1 = samples.get(idx0 + 1).copied().unwrap_or(s0);
+        resampled.push(s0 + frac * (s1 - s0));
+    }
+    resampled
+}
+
 fn parse_audio_samples(data: &[u8]) -> Result<Vec<f32>, String> {
     // Check if data is a WAV file container
     if data.starts_with(b"RIFF") && data.len() > 44 {
@@ -113,11 +131,14 @@ fn parse_audio_samples(data: &[u8]) -> Result<Vec<f32>, String> {
             if spec.channels > 1 {
                 samples = samples.chunks(spec.channels as usize).map(|c| c[0]).collect();
             }
+            if spec.sample_rate != 16000 {
+                samples = resample_to_16k(&samples, spec.sample_rate);
+            }
             return Ok(samples);
         }
     }
 
-    // Default to raw 16-bit PCM little-endian
+    // Default to raw 16-bit PCM little-endian (assumed 16kHz)
     let mut samples = Vec::with_capacity(data.len() / 2);
     for chunk in data.chunks_exact(2) {
         let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0;

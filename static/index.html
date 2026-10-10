@@ -551,19 +551,13 @@
             const ratio = inputSampleRate / 16000;
             const newLength = Math.round(buffer.length / ratio);
             const result = new Float32Array(newLength);
-            let offsetResult = 0;
-            let offsetBuffer = 0;
-            while (offsetResult < result.length) {
-                const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
-                let accum = 0;
-                let count = 0;
-                for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
-                    accum += buffer[i];
-                    count++;
-                }
-                result[offsetResult] = count > 0 ? (accum / count) : buffer[offsetBuffer];
-                offsetResult++;
-                offsetBuffer = nextOffsetBuffer;
+            for (let i = 0; i < newLength; i++) {
+                const srcIdx = i * ratio;
+                const idx0 = Math.floor(srcIdx);
+                const frac = srcIdx - idx0;
+                const s0 = buffer[idx0] || 0;
+                const s1 = buffer[idx0 + 1] !== undefined ? buffer[idx0 + 1] : s0;
+                result[i] = s0 + frac * (s1 - s0);
             }
             return result;
         }
@@ -602,9 +596,13 @@
                     }
                 });
 
-                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                try {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+                } catch (e) {
+                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                }
                 const actualSampleRate = audioContext.sampleRate;
-                console.log(`AudioContext initialized at native sampleRate: ${actualSampleRate} Hz`);
+                console.log(`AudioContext initialized at sampleRate: ${actualSampleRate} Hz`);
 
                 const source = audioContext.createMediaStreamSource(mediaStream);
                 processor = audioContext.createScriptProcessor(4096, 1, 1);
