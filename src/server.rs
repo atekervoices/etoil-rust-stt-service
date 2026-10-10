@@ -398,7 +398,7 @@ impl NemotronService {
 
         let mut full_text = String::new();
 
-        // Process in 560ms chunks (8960 samples)
+        // Process in 160ms chunks (2560 samples)
         for chunk in samples.chunks(CHUNK_SIZE) {
             let chunk_data: Vec<f32> = if chunk.len() < CHUNK_SIZE {
                 let mut padded = chunk.to_vec();

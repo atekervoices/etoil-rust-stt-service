@@ -82,7 +82,8 @@ RUN cargo build --release --features cuda --bin api_server
 # Collect any dynamic shared libraries (.so) produced by ort into /app/dist_libs
 RUN mkdir -p /app/dist_libs && \
     touch /app/dist_libs/.keep && \
-    find /app/target/release -name "*.so*" -exec cp {} /app/dist_libs/ \; 2>/dev/null || true
+    find /app/target /root /tmp -name "*onnxruntime*.so*" -exec cp -v -L {} /app/dist_libs/ \; 2>/dev/null || true && \
+    ls -la /app/dist_libs/
 
 # ------------------------------------------------------------------------------
 # Stage 3: Minimal Production Runtime (GPU / CUDA 12.6 + cuDNN)
@@ -92,7 +93,7 @@ FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
-ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/compat:/usr/local/lib:/app:${LD_LIBRARY_PATH}
+ENV LD_LIBRARY_PATH=/app:/usr/local/cuda/lib64:/usr/local/cuda/compat:/usr/local/lib:${LD_LIBRARY_PATH}
 
 # Install runtime dependencies (no Python or build toolchains in final image!)
 RUN apt-get update && apt-get install -y \
@@ -104,8 +105,9 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# 1. Copy compiled Rust binary and ONNX Runtime shared libraries
+# 1. Copy compiled Rust binary and ONNX Runtime shared libraries directly into /app and system library path
 COPY --from=builder /app/target/release/api_server /app/api_server
+COPY --from=builder /app/dist_libs/ /app/
 COPY --from=builder /app/dist_libs/ /usr/local/lib/
 RUN ldconfig || true
 
