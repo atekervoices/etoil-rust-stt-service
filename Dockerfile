@@ -79,12 +79,19 @@ COPY . .
 # Build the release binary with CUDA acceleration
 RUN cargo build --release --features cuda --bin api_server
 
+# Collect any dynamic shared libraries (.so) produced by ort into /app/dist_libs
+RUN mkdir -p /app/dist_libs && \
+    find /app/target/release -name "*.so*" -exec cp {} /app/dist_libs/ \; 2>/dev/null || true
+
 # ------------------------------------------------------------------------------
 # Stage 3: Minimal Production Runtime (GPU / CUDA 12.6 + cuDNN)
 # ------------------------------------------------------------------------------
 FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+ENV LD_LIBRARY_PATH=/usr/local/cuda/lib64:/usr/local/cuda/compat:/usr/local/lib:/app:${LD_LIBRARY_PATH}
 
 # Install runtime dependencies (no Python or build toolchains in final image!)
 RUN apt-get update && apt-get install -y \
@@ -96,8 +103,10 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-# 1. Copy compiled Rust binary
+# 1. Copy compiled Rust binary and ONNX Runtime shared libraries
 COPY --from=builder /app/target/release/api_server /app/api_server
+COPY --from=builder /app/dist_libs/ /usr/local/lib/
+RUN ldconfig || true
 
 # 2. Copy the exported ONNX model files from stage 1
 COPY --from=model-exporter /export/nemotron-3.5-asr-streaming-0.6b-onnx /app/nemotron-3.5-asr-streaming-0.6b-onnx

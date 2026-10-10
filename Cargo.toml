@@ -17,9 +17,10 @@ path = "src/api_server.rs"
 
 [features]
 default = []
-cuda = ["parakeet-rs/cuda"]
+cuda = ["parakeet-rs/cuda", "dep:ort", "ort/cuda"]
 
 [dependencies]
+ort = { version = "2.0.0-rc.13", default-features = false, features = ["std", "ndarray"], optional = true }
 parakeet-rs = { git = "https://github.com/altunenes/parakeet-rs.git", default-features = false, features = ["cpu", "ort-defaults"] }
 hound = "3.5"
 cpal = "0.17.3"

@@ -333,8 +333,16 @@ async fn transcribe_explicit_batch_handler(
 pub fn create_execution_config() -> Option<parakeet_rs::ExecutionConfig> {
     #[cfg(feature = "cuda")]
     {
-        println!("Execution backend: CUDA GPU Acceleration (ExecutionProvider::Cuda)");
-        Some(parakeet_rs::ExecutionConfig::new().with_execution_provider(parakeet_rs::ExecutionProvider::Cuda))
+        println!("Execution backend: Requesting CUDA GPU Acceleration (ExecutionProvider::Cuda)");
+        let config = parakeet_rs::ExecutionConfig::new()
+            .with_execution_provider(parakeet_rs::ExecutionProvider::Cuda)
+            .with_custom_configure(|builder| {
+                println!("Session configuration: registering CUDA ExecutionProvider strictly...");
+                builder.with_execution_providers([
+                    ort::ep::CUDA::default().build().error_on_failure(),
+                ])
+            });
+        Some(config)
     }
     #[cfg(not(feature = "cuda"))]
     {
