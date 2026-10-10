@@ -57,7 +57,6 @@ RUN rm -rf /export/models
 FROM ubuntu:24.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV ORT_CUDA_VERSION=12
 
 RUN apt-get update && apt-get install -y \
     curl \
@@ -87,15 +86,14 @@ RUN mkdir -p /app/dist_libs && \
     ls -la /app/dist_libs/
 
 # ------------------------------------------------------------------------------
-# Stage 3: Minimal Production Runtime (GPU / CUDA 12.6 + cuDNN)
+# Stage 3: Minimal Production Runtime (GPU / CUDA 13.0 + cuDNN)
 # ------------------------------------------------------------------------------
-FROM nvidia/cuda:12.6.3-cudnn-runtime-ubuntu24.04
+FROM nvidia/cuda:13.0.0-cudnn-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
-ENV ORT_CUDA_VERSION=12
-ENV LD_LIBRARY_PATH=/app:/usr/local/cuda/lib64:/usr/local/cuda/compat:/usr/local/lib:${LD_LIBRARY_PATH}
+ENV LD_LIBRARY_PATH=/app:/usr/local/cuda/lib64:/usr/local/cuda-13.0/lib64:/usr/local/cuda/compat:/usr/local/lib:${LD_LIBRARY_PATH}
 
 # Install runtime dependencies (no Python or build toolchains in final image!)
 RUN apt-get update && apt-get install -y \
@@ -111,7 +109,8 @@ WORKDIR /app
 COPY --from=builder /app/target/release/api_server /app/api_server
 COPY --from=builder /app/dist_libs/ /app/
 COPY --from=builder /app/dist_libs/ /usr/local/lib/
-RUN ldconfig || true
+RUN ldconfig || true && \
+    find /usr -name "*libcublasLt.so*" 2>/dev/null || true
 
 # 2. Copy the exported ONNX model files from stage 1
 COPY --from=model-exporter /export/nemotron-3.5-asr-streaming-0.6b-onnx /app/nemotron-3.5-asr-streaming-0.6b-onnx
