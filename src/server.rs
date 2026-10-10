@@ -530,17 +530,17 @@ pub async fn run_server(service: Arc<NemotronService>, port: u16) {
         .and_then(transcribe_explicit_batch_handler);
 
     // WebSocket: GET /v1/realtime (Real-time live streaming audio)
-    let ws_model_path = service.model_path.clone();
+    let ws_service = service.clone();
     let realtime_ws = warp::path("v1")
         .and(warp::path("realtime"))
         .and(warp::path::end())
         .and(warp::ws())
         .and(warp::query::<TranscriptionQuery>())
-        .and(warp::any().map(move || ws_model_path.clone()))
-        .map(|ws: Ws, query: TranscriptionQuery, model_path: Arc<String>| {
+        .and(warp::any().map(move || ws_service.clone()))
+        .map(|ws: Ws, query: TranscriptionQuery, service: Arc<NemotronService>| {
             let initial_lang = query.language.or(query.source_lang);
             ws.on_upgrade(move |socket| async move {
-                let ws_handler = WebSocketHandler::new(model_path);
+                let ws_handler = WebSocketHandler::new(service);
                 ws_handler.handle_websocket(socket, initial_lang).await;
             })
         });

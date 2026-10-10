@@ -87,11 +87,11 @@ def test_realtime_websocket(pcm16, audio_duration):
     print(f"WebSocket Connect:  {(t_connected - t_connect_start)*1000:.1f} ms")
     print(f"Handshake TTFB:     {ttfb_ms:.1f} ms (received ready event)")
 
-    # 560ms chunks (8960 samples @ 16-bit = 17920 bytes)
-    chunk_bytes = 8960 * 2
+    # 160ms chunks (2560 samples @ 16-bit = 5120 bytes)
+    chunk_bytes = 2560 * 2
     chunks = [pcm16[i:i + chunk_bytes] for i in range(0, len(pcm16), chunk_bytes)]
-    print(f"Audio Chunks:       {len(chunks)} chunks of 560ms ({audio_duration:.2f}s total audio)")
-    print("\n--- Streaming Audio at Real-Time Cadence (560ms intervals) ---")
+    print(f"Audio Chunks:       {len(chunks)} chunks of 160ms ({audio_duration:.2f}s total audio)")
+    print("\n--- Streaming Audio at Real-Time Cadence (160ms intervals) ---")
 
     t_stream_start = time.perf_counter()
     first_token_latency_ms = None
@@ -101,10 +101,10 @@ def test_realtime_websocket(pcm16, audio_duration):
     for idx, chunk in enumerate(chunks):
         t_chunk_send = time.perf_counter()
         ws.send_binary(chunk)
-        speech_sent_ms = (idx + 1) * 560
+        speech_sent_ms = (idx + 1) * 160
 
         # Receive any messages ready
-        deadline = t_chunk_send + 0.560
+        deadline = t_chunk_send + 0.160
         while time.perf_counter() < deadline:
             timeout_remain = max(0.01, deadline - time.perf_counter())
             ws.settimeout(timeout_remain)
