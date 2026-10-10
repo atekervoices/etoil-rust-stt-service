@@ -305,6 +305,7 @@ impl WebSocketHandler {
                                     };
 
                                     last_emitted_final = final_text.clone();
+                                    println!("[Final  | {}] {}", active_language.code(), text_to_emit);
 
                                     let _ = tx
                                         .send(WSMessage::Transcript {
@@ -361,6 +362,7 @@ impl WebSocketHandler {
                                             let current_clean = accumulated_transcript.trim().to_string();
                                             if !current_clean.is_empty() && current_clean != last_emitted_text {
                                                 last_emitted_text = current_clean.clone();
+                                                println!("[Stream | {}] {}", active_language.code(), current_clean);
 
                                                 let _ = tx
                                                     .send(WSMessage::Transcript {
