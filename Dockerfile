@@ -1,6 +1,6 @@
 # ==============================================================================
-# Multi-stage Dockerfile for Crane Nemotron Streaming STT Service (GPU/CUDA)
-# Completely Self-Contained: Automatically downloads, exports model & compiles Rust
+# Multi-stage Dockerfile for NVIDIA Nemotron 3.5 Streaming STT Service (GPU/CUDA)
+# Completely Self-Contained: Downloads original .nemo, exports to ONNX & compiles Rust
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -24,7 +24,7 @@ WORKDIR /export
 # Upgrade pip and install wheel/setuptools build tools
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
-# Install lightweight CPU PyTorch using --extra-index-url (allows PyPI dependencies like flit_core to resolve)
+# Install lightweight CPU PyTorch using --extra-index-url
 RUN pip install --no-cache-dir torch torchaudio --extra-index-url https://download.pytorch.org/whl/cpu
 
 # Install export requirements and NeMo toolkit
@@ -40,15 +40,15 @@ RUN pip install --no-cache-dir \
 
 # Copy export helper scripts
 COPY scripts/download_model.py /export/download_model.py
-COPY scripts/export_crane_nemotron.py /export/export_crane_nemotron.py
+COPY scripts/export_nemotron.py /export/export_nemotron.py
 
-# Download the Crane Nemotron model (.nemo) from Hugging Face
+# Download original NVIDIA Nemotron model (.nemo) from Hugging Face
 RUN python3 /export/download_model.py --output-dir /export/models
 
-# Export .nemo to parakeet-rs ONNX format
-RUN python3 /export/export_crane_nemotron.py /export/models/crane-nemo-asr-1.1.nemo /export/crane-nemo-asr-1.1-onnx
+# Export original NVIDIA .nemo to parakeet-rs ONNX format
+RUN python3 /export/export_nemotron.py /export/models/nemotron-3.5-asr-streaming-0.6b.nemo /export/nemotron-3.5-asr-streaming-0.6b-onnx
 
-# Clean up raw .nemo checkpoint to minimize any layer disk usage
+# Clean up raw .nemo checkpoint to minimize disk usage
 RUN rm -rf /export/models
 
 # ------------------------------------------------------------------------------
@@ -100,14 +100,14 @@ WORKDIR /app
 COPY --from=builder /app/target/release/api_server /app/api_server
 
 # 2. Copy the exported ONNX model files from stage 1
-COPY --from=model-exporter /export/crane-nemo-asr-1.1-onnx /app/crane-nemo-asr-1.1-onnx
+COPY --from=model-exporter /export/nemotron-3.5-asr-streaming-0.6b-onnx /app/nemotron-3.5-asr-streaming-0.6b-onnx
 
 # Expose HTTP / WebSocket API port
 EXPOSE 8099
 
 # Environment variables
 ENV RUST_LOG=info
-ENV MODEL_PATH=/app/crane-nemo-asr-1.1-onnx
+ENV MODEL_PATH=/app/nemotron-3.5-asr-streaming-0.6b-onnx
 ENV PORT=8099
 
 # Health check

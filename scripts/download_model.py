@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Download CraneAILabs/crane-nemo-asr-1.1 model from Hugging Face.
+Download official nvidia/nemotron-3.5-asr-streaming-0.6b model (.nemo) from Hugging Face.
 """
 
 import os
@@ -15,28 +15,30 @@ except ImportError:
     sys.exit(1)
 
 
-def download_crane_model(target_dir="./models"):
+def download_nemotron_model(target_dir="./models"):
     os.makedirs(target_dir, exist_ok=True)
-    repo_id = "CraneAILabs/crane-nemo-asr-1.1"
-    filename = "crane-nemo-asr-1.1.nemo"
+    repo_id = "nvidia/nemotron-3.5-asr-streaming-0.6b"
+    filename = "nemotron-3.5-asr-streaming-0.6b.nemo"
 
     print(f"Downloading {filename} from {repo_id}...")
     file_path = hf_hub_download(
         repo_id=repo_id,
         filename=filename,
         local_dir=target_dir,
-        local_dir_use_symlinks=False
+        local_dir_use_symlinks=False,
     )
-    print(f"✅ Model downloaded successfully to: {file_path}")
+    print(f"✅ NVIDIA Nemotron model downloaded successfully to: {file_path}")
     return file_path
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Download Crane Nemotron 1.1 model")
+    parser = argparse.ArgumentParser(
+        description="Download official NVIDIA Nemotron 3.5 Streaming model"
+    )
     parser.add_argument(
         "--output-dir",
         default="./models",
-        help="Directory to save the downloaded .nemo file (default: ./models)"
+        help="Directory to save the downloaded .nemo file (default: ./models)",
     )
     args = parser.parse_args()
-    download_crane_model(args.output_dir)
+    download_nemotron_model(args.output_dir)

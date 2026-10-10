@@ -7,13 +7,13 @@ services:
     ports:
       - "8099:8099"
     volumes:
-      # Model is baked directly into the image at /app/crane-nemo-asr-1.1-onnx!
+      # Model is baked directly into the image at /app/nemotron-3.5-asr-streaming-0.6b-onnx!
       # Optional: Uncomment below only if you wish to override with external host weights:
-      # - ./crane-nemo-asr-1.1-onnx:/app/crane-nemo-asr-1.1-onnx:ro
+      # - ./nemotron-3.5-asr-streaming-0.6b-onnx:/app/nemotron-3.5-asr-streaming-0.6b-onnx:ro
       - ./audio:/app/audio:ro
     environment:
       - RUST_LOG=info
-      - MODEL_PATH=/app/crane-nemo-asr-1.1-onnx
+      - MODEL_PATH=/app/nemotron-3.5-asr-streaming-0.6b-onnx
       - PORT=8099
     # GPU support (requires NVIDIA Container Toolkit)
     deploy:

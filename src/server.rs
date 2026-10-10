@@ -82,14 +82,26 @@ struct HealthResponse {
 async fn health_check() -> impl warp::Reply {
     warp::reply::json(&HealthResponse {
         status: "healthy".to_string(),
-        model: "CraneAILabs/crane-nemo-asr-1.1 (Nemotron 3.5 Streaming)".to_string(),
+        model: "nvidia/nemotron-3.5-asr-streaming-0.6b (Nemotron 3.5 Streaming Multilingual)".to_string(),
         supported_languages: vec![
-            "lg (Luganda)".to_string(),
             "en (English US)".to_string(),
             "en-gb (English Commonwealth)".to_string(),
+            "es (Spanish)".to_string(),
+            "fr (French)".to_string(),
+            "de (German)".to_string(),
+            "it (Italian)".to_string(),
+            "pt (Portuguese)".to_string(),
+            "ru (Russian)".to_string(),
+            "zh (Chinese)".to_string(),
+            "ja (Japanese)".to_string(),
+            "ko (Korean)".to_string(),
+            "hi (Hindi)".to_string(),
+            "ar (Arabic)".to_string(),
+            "tr (Turkish)".to_string(),
+            "sw (Swahili)".to_string(),
             "auto (Auto-detect)".to_string(),
         ],
-        excluded_languages: vec!["sn (Shona - disabled)".to_string()],
+        excluded_languages: vec![],
         chunk_size_samples: CHUNK_SIZE,
         chunk_duration_ms: CHUNK_DURATION_MS,
     })
@@ -728,10 +740,10 @@ pub async fn run_server(service: Arc<NemotronService>, port: u16) {
         .with(warp::log("api"));
 
     println!("============================================================");
-    println!(" Crane Nemotron 3.5 Streaming ASR Service running on port {port}");
+    println!(" NVIDIA Nemotron 3.5 Streaming ASR Service running on port {port}");
     println!(" Engine: parakeet-rs | FastConformer Native Transducer");
-    println!(" Languages: Luganda ('lg'), English ('en', 'en-gb'), Auto ('auto')");
-    println!(" Shona ('sn'): EXCLUDED / DISABLED");
+    println!(" Languages: Multilingual (en, es, fr, de, it, pt, ru, zh, ja, ko, hi, ar, tr, sw, auto)");
+    println!(" Model: nvidia/nemotron-3.5-asr-streaming-0.6b");
     println!("------------------------------------------------------------");
     println!(" [WebSocket Streaming]  ws://localhost:{port}/v1/realtime");
     println!(" [Single Transcribe]    POST http://localhost:{port}/v1/transcribe");

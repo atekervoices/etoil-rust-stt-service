@@ -97,11 +97,23 @@ impl WebSocketHandler {
 
         // Send ready message on connection
         let ready_msg = WSMessage::Ready {
-            model: "CraneAILabs/crane-nemo-asr-1.1 (Nemotron 3.5 Streaming)".to_string(),
+            model: "nvidia/nemotron-3.5-asr-streaming-0.6b (Nemotron 3.5 Streaming Multilingual)".to_string(),
             supported_languages: vec![
-                "lg (Luganda)".to_string(),
                 "en (English US)".to_string(),
                 "en-gb (English Commonwealth)".to_string(),
+                "es (Spanish)".to_string(),
+                "fr (French)".to_string(),
+                "de (German)".to_string(),
+                "it (Italian)".to_string(),
+                "pt (Portuguese)".to_string(),
+                "ru (Russian)".to_string(),
+                "zh (Chinese)".to_string(),
+                "ja (Japanese)".to_string(),
+                "ko (Korean)".to_string(),
+                "hi (Hindi)".to_string(),
+                "ar (Arabic)".to_string(),
+                "tr (Turkish)".to_string(),
+                "sw (Swahili)".to_string(),
                 "auto (Auto-detect)".to_string(),
             ],
             chunk_size_samples: CHUNK_SIZE,
