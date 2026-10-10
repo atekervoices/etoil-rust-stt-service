@@ -549,7 +549,7 @@ pub async fn run_server(service: Arc<NemotronService>, port: u16) {
                                     "name": "language",
                                     "in": "query",
                                     "required": false,
-                                    "description": "Target language: 'lg' (Luganda), 'en' (English), or 'auto' (Auto-detect). 'sn' (Shona) is explicitly rejected.",
+                                    "description": "Target language: 'en', 'es', 'fr', 'de', 'sw', or 'auto' (Auto-detect)",
                                     "schema": { "type": "string", "default": "auto" }
                                 },
                                 {
@@ -604,7 +604,7 @@ pub async fn run_server(service: Arc<NemotronService>, port: u16) {
                                     "name": "language",
                                     "in": "query",
                                     "required": false,
-                                    "description": "Target language: 'lg', 'en', or 'auto'",
+                                    "description": "Target language code (e.g. 'en', 'es', 'fr', 'sw', 'auto')",
                                     "schema": { "type": "string", "default": "auto" }
                                 }
                             ],
@@ -623,13 +623,13 @@ pub async fn run_server(service: Arc<NemotronService>, port: u16) {
                     "/v1/realtime": {
                         "get": {
                             "summary": "Real-time Streaming WebSocket (AssemblyAI style)",
-                            "description": "Bidirectional WebSocket connection for live 560ms cache-aware streaming. Connect with query param e.g. ws://localhost:8099/v1/realtime?language=lg. Supported messages: 'audio' (base64 PCM), 'partial' (delta text), 'final' (completed utterance), 'speech_started', 'speech_ended', 'reset', 'flush'.",
+                            "description": "Bidirectional WebSocket connection for live 560ms cache-aware streaming. Connect with query param e.g. ws://localhost:8099/v1/realtime?language=en. Supported messages: 'audio' (base64 PCM), 'partial' (delta text), 'final' (completed utterance), 'speech_started', 'speech_ended', 'reset', 'flush'.",
                             "parameters": [
                                 {
                                     "name": "language",
                                     "in": "query",
                                     "required": false,
-                                    "description": "Target language: 'lg', 'en', or 'auto'",
+                                    "description": "Target language: 'en', 'es', 'fr', 'sw', or 'auto'",
                                     "schema": { "type": "string", "default": "auto" }
                                 },
                                 {
@@ -654,11 +654,11 @@ pub async fn run_server(service: Arc<NemotronService>, port: u16) {
                         "TranscriptionResponse": {
                             "type": "object",
                             "properties": {
-                                "text": { "type": "string", "example": "Twasanyuse nnyo okukulaba." },
+                                "text": { "type": "string", "example": "How do you access market information for sweet potatoes" },
                                 "processing_time": { "type": "number", "example": 0.142 },
                                 "audio_duration": { "type": "number", "example": 2.80 },
                                 "real_time_factor": { "type": "number", "example": 0.051 },
-                                "language": { "type": "string", "example": "lg" }
+                                "language": { "type": "string", "example": "en" }
                             }
                         },
                         "BatchTranscriptionResponse": {
