@@ -1,9 +1,9 @@
 services:
-  crane-nemotron-stt:
+  nemotron-stt:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: crane-nemotron-stt-service
+    container_name: nemotron-stt-service
     ports:
       - "8099:8099"
     volumes:

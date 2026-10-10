@@ -16,7 +16,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model_dir = args
         .get(2)
         .map(|s| s.as_str())
-        .unwrap_or("crane-nemo-asr-1.1-onnx");
+        .unwrap_or("nemotron-3.5-asr-streaming-0.6b-onnx");
 
     let language = match SupportedLanguage::parse(lang_input) {
         Ok(l) => l,
@@ -27,14 +27,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     println!("============================================================");
-    println!(" Crane Nemotron 3.5 Live Streaming ASR");
+    println!(" NVIDIA Nemotron 3.5 Live Streaming ASR");
     println!(" Language: {} ({})", language.name(), language.code());
     println!(" Model directory: {model_dir}");
     println!(" Chunk size: 560ms (8960 samples @ 16kHz)");
-    println!(" Note: Shona ('sn') is excluded.");
     println!("============================================================");
 
-    println!("Loading Crane Nemotron model from '{model_dir}'...");
+    println!("Loading NVIDIA Nemotron model from '{model_dir}'...");
     let mut model = Nemotron::from_pretrained(model_dir, None)?;
     if model.mode() == NemotronMode::Multilingual {
         model.set_target_lang(language.to_nemotron_lang())?;

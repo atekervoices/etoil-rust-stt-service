@@ -337,11 +337,11 @@ pub struct NemotronService {
 
 impl NemotronService {
     pub async fn new(model_path: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        println!("Loading Crane Nemotron model from: {model_path}");
+        println!("Loading NVIDIA Nemotron model from: {model_path}");
 
         let model = Nemotron::from_pretrained(model_path, None)?;
         println!(
-            "Crane Nemotron model loaded successfully! Mode: {:?}",
+            "NVIDIA Nemotron model loaded successfully! Mode: {:?}",
             model.mode()
         );
 
@@ -531,9 +531,9 @@ pub async fn run_server(service: Arc<NemotronService>, port: u16) {
             let openapi_spec = serde_json::json!({
                 "openapi": "3.0.0",
                 "info": {
-                    "title": "Crane Nemotron Cache-Aware Streaming ASR API",
-                    "description": "Production-grade Speech-to-Text API specializing in Luganda ('lg') and English ('en'), using Crane Nemotron-3.5 0.6B FastConformer RNN-Transducer.",
-                    "version": "1.2.0",
+                    "title": "NVIDIA Nemotron 3.5 Cache-Aware Streaming ASR API",
+                    "description": "Production-grade Multilingual Speech-to-Text API using NVIDIA Nemotron-3.5 0.6B FastConformer RNN-Transducer.",
+                    "version": "1.3.0",
                     "contact": { "name": "API Support" }
                 },
                 "servers": [
@@ -694,7 +694,7 @@ pub async fn run_server(service: Arc<NemotronService>, port: u16) {
     let swagger_html = r#"<!DOCTYPE html>
 <html>
 <head>
-    <title>Crane Nemotron ASR API - Interactive Documentation</title>
+    <title>NVIDIA Nemotron 3.5 ASR API - Interactive Documentation</title>
     <link rel="stylesheet" type="text/css" href="https://unpkg.com/swagger-ui-dist@4.5.0/swagger-ui.css" />
     <style>
         body { margin: 0; background: #fafafa; }

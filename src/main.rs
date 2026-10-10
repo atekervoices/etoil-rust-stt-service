@@ -11,11 +11,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        println!("Usage: {} <audio.wav> [language: lg|en|auto] [model_dir]", args[0]);
-        println!("Example: {} sample.wav lg ./crane-nemo-asr-1.1-onnx", args[0]);
+        println!("Usage: {} <audio.wav> [language: en|es|fr|de|auto] [model_dir]", args[0]);
+        println!("Example: {} sample.wav en ./nemotron-3.5-asr-streaming-0.6b-onnx", args[0]);
         println!();
-        println!("Supported languages: lg (Luganda), en (English), auto (Auto-detect)");
-        println!("Note: Shona ('sn') is excluded in this service configuration.");
+        println!("Supported languages: Multilingual (en, es, fr, de, it, pt, ru, zh, ja, ko, hi, ar, tr, sw, auto)");
         return Ok(());
     }
 
@@ -24,7 +23,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model_dir = args
         .get(3)
         .map(|s| s.as_str())
-        .unwrap_or("crane-nemo-asr-1.1-onnx");
+        .unwrap_or("nemotron-3.5-asr-streaming-0.6b-onnx");
 
     let language = match SupportedLanguage::parse(lang_input) {
         Ok(l) => l,
@@ -35,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     println!("============================================================");
-    println!(" Crane Nemotron 3.5 Cache-Aware File Transcription");
+    println!(" NVIDIA Nemotron 3.5 Cache-Aware File Transcription");
     println!(" Audio file: {audio_path}");
     println!(" Target language: {} ({})", language.name(), language.code());
     println!(" Model directory: {model_dir}");
