@@ -337,10 +337,10 @@ pub fn create_execution_config() -> Option<parakeet_rs::ExecutionConfig> {
         let config = parakeet_rs::ExecutionConfig::new()
             .with_execution_provider(parakeet_rs::ExecutionProvider::Cuda)
             .with_custom_configure(|builder| {
-                println!("Session configuration: registering CUDA ExecutionProvider strictly...");
-                builder.with_execution_providers([
+                println!("Session configuration: registering CUDA ExecutionProvider strictly (GPU ONLY)...");
+                Ok(builder.with_execution_providers([
                     ort::ep::CUDA::default().build().error_on_failure(),
-                ])
+                ])?)
             });
         Some(config)
     }
