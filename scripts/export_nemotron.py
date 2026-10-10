@@ -113,14 +113,14 @@ class EncoderWithPromptWrapper(torch.nn.Module):
 
 
 def extract_tokenizer(input_path, output_dir, model=None):
-    """Robustly extracts tokenizer.model from .nemo tar archive or model object."""
+    """Robustly extracts tokenizer.model from .nemo tar archive, model object, or fallback."""
     tokenizer_dest = os.path.join(output_dir, "tokenizer.model")
 
     # Method 1: Search members of .nemo tarball
     try:
         with tarfile.open(input_path, "r:*") as tar:
             for member in tar.getmembers():
-                if member.name.endswith("tokenizer.model"):
+                if member.name.endswith(".model") or "tokenizer.model" in member.name:
                     f = tar.extractfile(member)
                     if f is not None:
                         with open(tokenizer_dest, "wb") as out:
@@ -132,12 +132,32 @@ def extract_tokenizer(input_path, output_dir, model=None):
 
     # Method 2: Inspect model tokenizer attributes if loaded
     if model is not None and hasattr(model, "tokenizer"):
-        for attr in ["model_path", "tokenizer_file", "model"]:
+        for attr in ["model_path", "tokenizer_file", "model", "vocab_file"]:
             path_val = getattr(model.tokenizer, attr, None)
             if isinstance(path_val, str) and os.path.exists(path_val):
                 shutil.copy2(path_val, tokenizer_dest)
                 print(f"  Copied tokenizer.model from tokenizer.{attr}: {path_val}")
                 return True
+        if hasattr(model.tokenizer, "tokenizer") and hasattr(model.tokenizer.tokenizer, "vocab_file"):
+            vf = getattr(model.tokenizer.tokenizer, "vocab_file", None)
+            if isinstance(vf, str) and os.path.exists(vf):
+                shutil.copy2(vf, tokenizer_dest)
+                print(f"  Copied tokenizer.model from tokenizer.tokenizer.vocab_file: {vf}")
+                return True
+
+    # Method 3: Fallback from official parakeet-rs ONNX repo
+    try:
+        from huggingface_hub import hf_hub_download
+        tok_file = hf_hub_download(
+            repo_id="altunenes/parakeet-rs",
+            filename="nemotron-3.5-asr-streaming-0.6b-onnx/tokenizer.model",
+        )
+        if os.path.exists(tok_file):
+            shutil.copy2(tok_file, tokenizer_dest)
+            print("  Fallback: Downloaded tokenizer.model from altunenes/parakeet-rs")
+            return True
+    except Exception as e:
+        print(f"  HF fallback note: {e}")
 
     return os.path.exists(tokenizer_dest)
 
