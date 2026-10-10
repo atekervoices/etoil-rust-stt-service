@@ -93,10 +93,12 @@ FROM nvidia/cuda:13.0.0-cudnn-runtime-ubuntu24.04
 ENV DEBIAN_FRONTEND=noninteractive
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
-ENV LD_LIBRARY_PATH=/app:/usr/local/cuda/lib64:/usr/local/cuda-13.0/lib64:/usr/local/cuda/compat:/usr/local/lib:${LD_LIBRARY_PATH}
+ENV LD_LIBRARY_PATH=/app:/usr/local/nvidia/lib64:/usr/local/nvidia/lib:/usr/local/cuda/lib64:/usr/local/cuda-13.0/lib64:/usr/lib/x86_64-linux-gnu:/usr/local/lib:${LD_LIBRARY_PATH}
 
-# Install runtime dependencies (no Python or build toolchains in final image!)
-RUN apt-get update && apt-get install -y \
+# Remove CUDA forward-compatibility shims (causes Error 803 on consumer GeForce RTX GPUs)
+# and install runtime dependencies
+RUN rm -rf /usr/local/cuda/compat /etc/ld.so.conf.d/*cuda-compat*.conf && \
+    apt-get update && apt-get install -y \
     ca-certificates \
     libssl3t64 \
     libasound2t64 \
