@@ -1,6 +1,6 @@
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
-use parakeet_rs::NemotronMode;
+use parakeet_rs::{Nemotron, NemotronMode};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -148,13 +148,10 @@ impl WebSocketHandler {
         let mut silent_chunks_count: usize = 0;
         let start_time = std::time::Instant::now();
 
-        // Initialize active language on the shared GPU model session
-        {
-            let mut model = self.service.shared_model.lock().await;
-            model.reset();
-            if model.mode() == NemotronMode::Multilingual {
-                let _ = model.set_target_lang(active_language.to_nemotron_lang());
-            }
+        // Initialize independent client-isolated Nemotron stream from shared GPU handle
+        let mut model = Nemotron::from_shared(&self.service.handle);
+        if model.mode() == NemotronMode::Multilingual {
+            let _ = model.set_target_lang(active_language.to_nemotron_lang());
         }
 
         while let Some(msg) = ws_rx.next().await {
@@ -200,20 +197,17 @@ impl WebSocketHandler {
                                             active_language.to_nemotron_lang()
                                         );
 
-                                        {
-                                            let mut model = self.service.shared_model.lock().await;
-                                            if model.mode() == NemotronMode::Multilingual {
-                                                if let Err(e) = model.set_target_lang(
-                                                    active_language.to_nemotron_lang(),
-                                                ) {
-                                                    let _ = tx
-                                                        .send(WSMessage::Error {
-                                                            message: format!(
-                                                                "Failed to set model language: {e}"
-                                                            ),
-                                                        })
-                                                        .await;
-                                                }
+                                        if model.mode() == NemotronMode::Multilingual {
+                                            if let Err(e) = model.set_target_lang(
+                                                active_language.to_nemotron_lang(),
+                                            ) {
+                                                let _ = tx
+                                                    .send(WSMessage::Error {
+                                                        message: format!(
+                                                            "Failed to set model language: {e}"
+                                                        ),
+                                                    })
+                                                    .await;
                                             }
                                         }
                                     }
@@ -267,36 +261,30 @@ impl WebSocketHandler {
                                     last_emitted_text.clear();
                                     last_emitted_final.clear();
                                     silent_chunks_count = 0;
-                                    {
-                                        let mut model = self.service.shared_model.lock().await;
-                                        model.reset();
-                                    }
+                                    model.reset();
                                     println!("WebSocket: Model cache reset by client request");
                                 }
                             }
 
                             WSMessage::End | WSMessage::Flush => {
-                                {
-                                    let mut model = self.service.shared_model.lock().await;
-                                    // Process any remaining audio in the buffer
-                                    if !audio_buffer.is_empty() {
-                                        let mut final_chunk: Vec<f32> = audio_buffer.drain(..).collect();
-                                        final_chunk.resize(CHUNK_SIZE, 0.0);
-                                        let delta_res: Result<String, _> = model.transcribe_chunk(&final_chunk);
-                                        if let Ok(delta) = delta_res {
-                                            accumulated_transcript.push_str(&delta);
-                                        }
+                                // Process any remaining audio in the buffer
+                                if !audio_buffer.is_empty() {
+                                    let mut final_chunk: Vec<f32> = audio_buffer.drain(..).collect();
+                                    final_chunk.resize(CHUNK_SIZE, 0.0);
+                                    let delta_res: Result<String, _> = model.transcribe_chunk(&final_chunk);
+                                    if let Ok(delta) = delta_res {
+                                        accumulated_transcript.push_str(&delta);
                                     }
-                                    // Flush trailing lookahead tokens (right-context flush)
-                                    let flush_chunk = vec![0.0f32; CHUNK_SIZE];
-                                    for _ in 0..2 {
-                                        let delta_res: Result<String, _> = model.transcribe_chunk(&flush_chunk);
-                                        if let Ok(delta) = delta_res {
-                                            accumulated_transcript.push_str(&delta);
-                                        }
-                                    }
-                                    model.reset();
                                 }
+                                // Flush trailing lookahead tokens (right-context flush)
+                                let flush_chunk = vec![0.0f32; CHUNK_SIZE];
+                                for _ in 0..2 {
+                                    let delta_res: Result<String, _> = model.transcribe_chunk(&flush_chunk);
+                                    if let Ok(delta) = delta_res {
+                                        accumulated_transcript.push_str(&delta);
+                                    }
+                                }
+                                model.reset();
 
                                 let final_text = accumulated_transcript.trim().to_string();
                                 if !final_text.is_empty() {
@@ -340,10 +328,7 @@ impl WebSocketHandler {
                                 accumulated_transcript.clear();
                                 last_emitted_text.clear();
                                 silent_chunks_count = 0;
-                                {
-                                    let mut model = self.service.shared_model.lock().await;
-                                    model.reset();
-                                }
+                                model.reset();
                             }
 
                             _ => {}
@@ -367,10 +352,7 @@ impl WebSocketHandler {
                             let chunk: Vec<f32> = audio_buffer.drain(..CHUNK_SIZE).collect();
 
                             // Continuous stateful Nemotron streaming (native blank transducer)
-                            let delta_res = {
-                                let mut model = self.service.shared_model.lock().await;
-                                model.transcribe_chunk(&chunk)
-                            };
+                            let delta_res: Result<String, _> = model.transcribe_chunk(&chunk);
 
                             match delta_res {
                                 Ok(delta) => {
@@ -407,7 +389,6 @@ impl WebSocketHandler {
                                             // After ~800ms (5 chunks of 160ms) of pause after speech, finalize sentence
                                             if silent_chunks_count >= 5 {
                                                 // Flush trailing lookahead tokens
-                                                let mut model = self.service.shared_model.lock().await;
                                                 let flush_chunk = vec![0.0f32; CHUNK_SIZE];
                                                 let delta_res: Result<String, _> = model.transcribe_chunk(&flush_chunk);
                                                 if let Ok(flush_delta) = delta_res {
@@ -461,9 +442,6 @@ impl WebSocketHandler {
         }
 
         // Cleanup model cache when client disconnects
-        {
-            let mut model = self.service.shared_model.lock().await;
-            model.reset();
-        }
+        model.reset();
     }
 }

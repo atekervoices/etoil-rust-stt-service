@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use multer::Multipart;
-use parakeet_rs::{Nemotron, NemotronMode};
+use parakeet_rs::{Nemotron, NemotronHandle, NemotronMode};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
@@ -347,7 +347,7 @@ pub fn create_execution_config() -> Option<parakeet_rs::ExecutionConfig> {
 
 pub struct NemotronService {
     pub model_path: Arc<String>,
-    pub shared_model: Arc<Mutex<Nemotron>>,
+    pub handle: Arc<NemotronHandle>,
 }
 
 impl NemotronService {
@@ -355,22 +355,23 @@ impl NemotronService {
         println!("Loading NVIDIA Nemotron model from: {model_path}");
 
         let exec_config = create_execution_config();
-        let mut model = Nemotron::from_pretrained(model_path, exec_config)?;
+        let handle = NemotronHandle::from_pretrained(model_path, exec_config)?;
         println!(
             "NVIDIA Nemotron model loaded successfully! Mode: {:?}",
-            model.mode()
+            handle.mode()
         );
 
         // Pre-warm model to compile CUDA kernels and claim GPU memory
         println!("Pre-warming model to allocate GPU memory pools and compile kernels...");
+        let mut warmup_model = Nemotron::from_shared(&handle);
         let dummy_chunk = vec![0.0f32; CHUNK_SIZE];
-        let _ = model.transcribe_chunk(&dummy_chunk);
-        model.reset();
+        let _ = warmup_model.transcribe_chunk(&dummy_chunk);
+        drop(warmup_model);
         println!("Warmup complete - ready for streaming!");
 
         Ok(Self {
             model_path: Arc::new(model_path.to_string()),
-            shared_model: Arc::new(Mutex::new(model)),
+            handle: Arc::new(handle),
         })
     }
 
@@ -383,8 +384,7 @@ impl NemotronService {
         let samples = parse_audio_samples(audio_data)?;
         let audio_duration = samples.len() as f64 / SAMPLE_RATE as f64;
 
-        let mut model = self.shared_model.lock().await;
-        model.reset();
+        let mut model = Nemotron::from_shared(&self.handle);
 
         if model.mode() == NemotronMode::Multilingual {
             model.set_target_lang(language.to_nemotron_lang())?;
@@ -411,14 +411,13 @@ impl NemotronService {
         // Flush 3 chunks to release lookahead tokens from RNNT joint network
         let flush_chunk = vec![0.0f32; CHUNK_SIZE];
         for _ in 0..3 {
-            if let Ok(flush_delta) = model.transcribe_chunk(&flush_chunk) {
+            let delta_res: Result<String, _> = model.transcribe_chunk(&flush_chunk);
+            if let Ok(flush_delta) = delta_res {
                 if !flush_delta.is_empty() {
                     full_text.push_str(&flush_delta);
                 }
             }
         }
-
-        model.reset();
 
         let processing_time = start_time.elapsed().as_secs_f64();
         let real_time_factor = if audio_duration > 0.0 {
