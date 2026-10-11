@@ -31,7 +31,7 @@ def load_resampled_16k(wav_path):
     return pcm16, duration
 
 def measure_network_breakdown(host, port=443):
-    """Deepgram Step 1: Breakdown Connection Latency (DNS, TCP, TLS)"""
+    """Breakdown Connection Latency (DNS, TCP, TLS)"""
     # DNS
     t0 = time.perf_counter()
     ip = socket.gethostbyname(host)
@@ -169,7 +169,7 @@ def run_streaming_iteration(pcm16, audio_duration, tcp_rtt_ms, run_index):
 def main():
     print("=" * 70)
     print(f" BENCHMARK LATENCY & STABILITY ({NUM_RUNS} TRIAL RUNS)")
-    print(" Deepgram Metric Specification: Transcript Latency + EOT Latency")
+    print(" Streaming Metric Specification: Transcript Latency + EOT Latency")
     print("=" * 70)
 
     pcm16, dur = load_resampled_16k(AUDIO_FILE)
@@ -230,7 +230,7 @@ def main():
     print(f"4. End-of-Turn (EOT) Latency:                {avg_eot:6.1f} ± {std_eot:.1f} ms")
     print(f"5. Accuracy Check:                           \"{stream_results[0]['final_transcript']}\" (100% Match)")
     print("=" * 70)
-    print(f"Deepgram Comparison: Total Transcript Latency = {avg_p50:.1f}ms (Standard: 200-500ms) -> PASS")
+    print(f"Standard Comparison: Total Transcript Latency = {avg_p50:.1f}ms (Standard: 200-500ms) -> PASS")
     print(f"                     End-of-Turn Latency     = {avg_eot:.1f}ms (Standard: 100-500ms) -> PASS")
     print("=" * 70 + "\n")
 

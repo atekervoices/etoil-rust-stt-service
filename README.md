@@ -32,15 +32,15 @@ Optimized for real-time conversational AI, voice agents, live captioning, and te
 
 ## Benchmarks & Latency Milestones
 
-Tested on staging host (`stt-staging.atekervoices.com`, NVIDIA GeForce RTX 2060 8GB VRAM) across independent trials using official **Deepgram** and **Gladia** latency specifications:
+Tested on staging host (`stt-staging.atekervoices.com`, NVIDIA GeForce RTX 2060 8GB VRAM) across independent trials using standardized streaming latency specifications:
 
-### 1. Latency Milestones (Gladia / Deepgram Standards)
+### 1. Real-Time Latency Milestones
 
-| Milestone / Metric | Commercial Standard (Deepgram / Gladia) | Our Nemotron Service (RTX 2060) | Evaluation |
+| Milestone / Metric | Industry Target (Voice Agents & Captioning) | Our Nemotron Service (RTX 2060) | Evaluation |
 | :--- | :--- | :--- | :--- |
 | **Network Transit Time (TCP RTT)** | 20 – 200 ms | **85 – 108 ms** | *Normal internet WAN* |
 | **Pure GPU Compute Step (per 160ms)** | 150 – 300 ms | **24.2 ms** | **~6× faster than cloud baselines** |
-| **Total Transcript Latency (p50 Median)** | 200 – 500 ms | **132.6 ms** | **Beats standard (<150ms)** |
+| **Total Transcript Latency (p50 Median)** | 200 – 500 ms | **132.6 ms** | **Ultra-low latency (<150ms)** |
 | **Total Transcript Latency (p95 Tail)** | < 500 ms | **153.0 ms** | **Ultra-tight tail (±11ms jitter)** |
 | **End-of-Turn (EOT) Latency** | 100 – 500 ms | **372.7 ± 13.4 ms** | **Passes voice-agent budget** |
 | **Batch Real-Time Factor (RTF)** | < 1.0 | **0.2545 (3.93×)** | **High throughput** |
@@ -246,7 +246,7 @@ docker compose up -d --force-recreate nemotron-stt
 
 ## Latency Measurement Suite
 
-Run the included Gladia / Deepgram standardized benchmark script:
+Run the included standardized streaming latency benchmark script:
 
 ```bash
 # Run 3-iteration statistical benchmark:

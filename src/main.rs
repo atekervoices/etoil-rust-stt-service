@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(" Audio file: {audio_path}");
     println!(" Target language: {} ({})", language.name(), language.code());
     println!(" Model directory: {model_dir}");
-    println!(" Chunk size: 560ms (8960 samples @ 16kHz)");
+    println!(" Chunk size: 160ms (2560 samples @ 16kHz)");
     println!("============================================================");
 
     if !Path::new(model_dir).exists() {
@@ -89,7 +89,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let transcribe_start = Instant::now();
     let mut full_transcript = String::new();
 
-    // Stream through cache-aware 560ms chunks
+    // Stream through cache-aware 160ms chunks
     for (chunk_idx, chunk) in samples.chunks(CHUNK_SIZE).enumerate() {
         let chunk_data: Vec<f32> = if chunk.len() < CHUNK_SIZE {
             let mut padded = chunk.to_vec();

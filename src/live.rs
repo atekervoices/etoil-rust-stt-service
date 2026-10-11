@@ -30,7 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!(" NVIDIA Nemotron 3.5 Live Streaming ASR");
     println!(" Language: {} ({})", language.name(), language.code());
     println!(" Model directory: {model_dir}");
-    println!(" Chunk size: 560ms (8960 samples @ 16kHz)");
+    println!(" Chunk size: 160ms (2560 samples @ 16kHz)");
     println!("============================================================");
 
     println!("Loading NVIDIA Nemotron model from '{model_dir}'...");

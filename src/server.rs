@@ -159,7 +159,7 @@ fn parse_audio_samples(data: &[u8]) -> Result<Vec<f32>, String> {
     Ok(samples)
 }
 
-/// Unified transcription handler (AssemblyAI / Industry Standard):
+/// Unified transcription handler:
 /// - Accepts raw binary audio (application/octet-stream, audio/wav)
 /// - Accepts multipart/form-data:
 ///     - 1 file uploaded -> returns single TranscriptionResponse directly
@@ -214,7 +214,7 @@ async fn transcribe_unified_handler(
         }
 
         if files.len() == 1 {
-            // Single file uploaded via multipart (AssemblyAI Sync STT style)
+            // Single file uploaded via multipart
             let single_file = files.into_iter().next().unwrap();
             match service
                 .transcribe_audio_bytes(&single_file.data, language)
@@ -565,7 +565,7 @@ pub async fn run_server(service: Arc<NemotronService>, port: u16) {
                     "/v1/transcribe": {
                         "post": {
                             "summary": "Transcribe Audio (Single or Batch)",
-                            "description": "Synchronous STT (AssemblyAI style). Accepts raw 16-bit PCM/WAV binary or multipart/form-data. If 1 file is sent, returns a single transcript object. If multiple files are uploaded, returns a batch results object.",
+                            "description": "Synchronous STT. Accepts raw 16-bit PCM/WAV binary or multipart/form-data. If 1 file is sent, returns a single transcript object. If multiple files are uploaded, returns a batch results object.",
                             "parameters": [
                                 {
                                     "name": "language",
@@ -644,8 +644,8 @@ pub async fn run_server(service: Arc<NemotronService>, port: u16) {
                     },
                     "/v1/realtime": {
                         "get": {
-                            "summary": "Real-time Streaming WebSocket (AssemblyAI style)",
-                            "description": "Bidirectional WebSocket connection for live 560ms cache-aware streaming. Connect with query param e.g. ws://localhost:8099/v1/realtime?language=en. Supported messages: 'audio' (base64 PCM), 'partial' (delta text), 'final' (completed utterance), 'speech_started', 'speech_ended', 'reset', 'flush'.",
+                            "summary": "Real-time Streaming WebSocket",
+                            "description": "Bidirectional WebSocket connection for live 160ms cache-aware streaming. Connect with query param e.g. ws://localhost:8099/v1/realtime?language=en. Supported messages: direct raw 16-bit PCM binary streaming or JSON 'audio' (base64 PCM), 'partial' (delta text), 'final' (completed utterance), 'reset', 'flush'.",
                             "parameters": [
                                 {
                                     "name": "language",
