@@ -74,15 +74,12 @@ struct HealthResponse {
     status: String,
     model: String,
     supported_languages: Vec<String>,
-    excluded_languages: Vec<String>,
-    chunk_size_samples: usize,
-    chunk_duration_ms: usize,
 }
 
 async fn health_check() -> impl warp::Reply {
     warp::reply::json(&HealthResponse {
         status: "healthy".to_string(),
-        model: "nvidia/nemotron-3.5-asr-streaming-0.6b (Nemotron 3.5 Streaming Multilingual)".to_string(),
+        model: "phosai-streaming-voice-v1".to_string(),
         supported_languages: vec![
             "en (English US)".to_string(),
             "en-gb (English Commonwealth)".to_string(),
@@ -101,9 +98,6 @@ async fn health_check() -> impl warp::Reply {
             "sw (Swahili)".to_string(),
             "auto (Auto-detect)".to_string(),
         ],
-        excluded_languages: vec![],
-        chunk_size_samples: CHUNK_SIZE,
-        chunk_duration_ms: CHUNK_DURATION_MS,
     })
 }
 

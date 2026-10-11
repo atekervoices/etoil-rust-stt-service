@@ -1,0 +1,33 @@
+# Supported Languages
+
+PhosAI utilizes multilingual language conditioning with one-hot prompt vector embeddings, enabling support for 40 languages and dialects.
+
+## Language Selection
+
+Pass the target language code in query parameters:
+- REST: `POST /v1/transcribe?language=es`
+- WebSocket: `wss://.../v1/realtime?language=es`
+
+---
+
+## Supported Language Matrix
+
+| Language | Code | Prompt Index | Description |
+| :--- | :--- | :--- | :--- |
+| **English (US)** | `en`, `en-US` | `0` | Standard US English |
+| **English (Commonwealth)** | `en-gb`, `en-GB` | `1` | British & Commonwealth English |
+| **Spanish** | `es`, `es-ES` | `2` | Castilian & Latin American Spanish |
+| **French** | `fr`, `fr-FR` | `8` | French |
+| **German** | `de`, `de-DE` | `9` | German |
+| **Italian** | `it`, `it-IT` | `15` | Italian |
+| **Portuguese** | `pt`, `pt-PT` | `4` | European & Brazilian Portuguese |
+| **Russian** | `ru`, `ru-RU` | `5` | Russian |
+| **Chinese** | `zh`, `zh-CN` | `11` | Simplified Mandarin Chinese |
+| **Japanese** | `ja`, `ja-JP` | `10` | Japanese |
+| **Korean** | `ko`, `ko-KR` | `12` | Korean |
+| **Hindi** | `hi`, `hi-IN` | `6` | Hindi |
+| **Arabic** | `ar`, `ar-AR` | `7` | Modern Standard Arabic |
+| **Turkish** | `tr`, `tr-TR` | `14` | Turkish |
+| **Swahili** | `sw`, `sw-KE` | `45` | East African Swahili |
+| **Luganda** | `lg`, `lug` | `101` | Luganda (Auto prompt slot) |
+| **Auto-Detect** | `auto` | `101` | Automatically identifies language |

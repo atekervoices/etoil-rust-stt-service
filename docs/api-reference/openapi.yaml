@@ -1,0 +1,290 @@
+openapi: 3.1.0
+info:
+  title: PhosAI Speech-to-Text API
+  description: High-performance real-time streaming and batch Speech-to-Text API powered
+    by the PhosAI Voice Engine with sub-40ms token delivery and multi-language support.
+  version: 1.0.0
+  contact:
+    name: PhosAI Support
+    url: https://atekervoices.com
+servers:
+- url: https://stt-staging.atekervoices.com
+  description: Production / Staging Server
+- url: http://localhost:8099
+  description: Local Development Server
+paths:
+  /health:
+    get:
+      summary: Health Check & Engine Readiness
+      description: Checks the health of the PhosAI service and verifies the voice
+        engine is ready for real-time transcription.
+      responses:
+        '200':
+          description: Service is healthy and ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: healthy
+                model: phosai-streaming-voice-v1
+                supported_languages:
+                - en
+                - es
+                - fr
+                - de
+                - sw
+                - lg
+                - auto
+  /v1/transcribe:
+    post:
+      summary: Synchronous Audio Transcription
+      description: Transcribes pre-recorded audio files. Accepts raw 16-bit PCM/WAV
+        binary data or multipart/form-data. If 1 file is sent, returns a single transcript
+        object. If multiple files are uploaded, returns a batch results object.
+      parameters:
+      - name: language
+        in: query
+        required: false
+        description: 'Target language: ''en'', ''es'', ''fr'', ''de'', ''sw'', ''lg'',
+          or ''auto'' (Auto-detect)'
+        schema:
+          type: string
+          default: auto
+      - name: sample_rate
+        in: query
+        required: false
+        description: 'Audio sample rate in Hz (default: 16000)'
+        schema:
+          type: integer
+          default: 16000
+      requestBody:
+        required: true
+        description: Raw audio binary (audio/wav, application/octet-stream) or multipart/form-data
+          audio file(s)
+        content:
+          application/octet-stream:
+            schema:
+              type: string
+              format: binary
+          audio/wav:
+            schema:
+              type: string
+              format: binary
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                audio:
+                  type: string
+                  format: binary
+                  description: Single audio file
+                files:
+                  type: array
+                  items:
+                    type: string
+                    format: binary
+                  description: Multiple audio files
+      responses:
+        '200':
+          description: Transcription successful
+          content:
+            application/json:
+              schema:
+                oneOf:
+                - $ref: '#/components/schemas/TranscriptionResponse'
+                - $ref: '#/components/schemas/BatchTranscriptionResponse'
+              example:
+                text: How do you access market information for sweet potato
+                processing_time: 1.052
+                audio_duration: 4.14
+                real_time_factor: 0.254
+                language: en
+        '400':
+          description: Invalid audio file format or unparseable headers
+        '500':
+          description: Inference computation error
+  /v1/transcribe/batch:
+    post:
+      summary: Explicit Batch Multi-File Transcription
+      description: Upload multiple audio files simultaneously via multipart/form-data.
+        Returns an aggregated batch result containing per-file transcripts, processing
+        times, and real-time factors.
+      parameters:
+      - name: language
+        in: query
+        required: false
+        description: 'Target language: ''en'', ''es'', ''fr'', ''sw'', ''lg'', or
+          ''auto'''
+        schema:
+          type: string
+          default: auto
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file1:
+                  type: string
+                  format: binary
+                file2:
+                  type: string
+                  format: binary
+      responses:
+        '200':
+          description: Batch transcription results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BatchTranscriptionResponse'
+              example:
+                results:
+                - name: audio1.wav
+                  text: Market information analysis
+                  processing_time: 0.52
+                  audio_duration: 2.1
+                  real_time_factor: 0.248
+                  success: true
+                  error: null
+                - name: audio2.wav
+                  text: Sweet potato distribution pricing
+                  processing_time: 0.74
+                  audio_duration: 3.0
+                  real_time_factor: 0.247
+                  success: true
+                  error: null
+                total_processing_time: 1.26
+                total_files: 2
+                successful_files: 2
+                failed_files: 0
+  /v1/realtime:
+    get:
+      summary: Real-Time Streaming WebSocket
+      description: 'Bidirectional WebSocket connection for live speech transcription.
+        Connect with query param e.g. `wss://stt-staging.atekervoices.com/v1/realtime?language=en`.
+        Supports direct raw 16-bit PCM binary streaming or JSON messages: `audio`
+        (base64 PCM), `partial` (delta text), `final` (completed utterance), `reset`,
+        `flush`.'
+      parameters:
+      - name: language
+        in: query
+        required: false
+        description: 'Target language: ''en'', ''en-gb'', ''es'', ''fr'', ''de'',
+          ''it'', ''pt'', ''ru'', ''zh'', ''ja'', ''ko'', ''hi'', ''ar'', ''tr'',
+          ''sw'', ''lg'', or ''auto'''
+        schema:
+          type: string
+          default: auto
+      - name: sample_rate
+        in: query
+        required: false
+        description: 'Audio sample rate in Hz (default: 16000)'
+        schema:
+          type: integer
+          default: 16000
+      responses:
+        '101':
+          description: Switching Protocols to WebSocket streaming session
+          content:
+            application/json:
+              schema:
+                type: object
+                description: WebSocket messaging stream protocol
+components:
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: healthy
+        model:
+          type: string
+          example: phosai-streaming-voice-v1
+        supported_languages:
+          type: array
+          items:
+            type: string
+      required:
+      - status
+      - model
+      - supported_languages
+    TranscriptionResponse:
+      type: object
+      properties:
+        text:
+          type: string
+          description: Recognized transcript text
+        processing_time:
+          type: number
+          format: double
+          description: Server computation time in seconds
+        audio_duration:
+          type: number
+          format: double
+          description: Total duration of input audio in seconds
+        real_time_factor:
+          type: number
+          format: double
+          description: RTF (processing_time / audio_duration)
+        language:
+          type: string
+          description: Detected or configured language code
+      required:
+      - text
+      - processing_time
+      - audio_duration
+      - real_time_factor
+      - language
+    BatchTranscriptionResult:
+      type: object
+      properties:
+        name:
+          type: string
+        text:
+          type: string
+        processing_time:
+          type: number
+          format: double
+        audio_duration:
+          type: number
+          format: double
+        real_time_factor:
+          type: number
+          format: double
+        success:
+          type: boolean
+        error:
+          type: string
+          nullable: true
+      required:
+      - name
+      - text
+      - processing_time
+      - audio_duration
+      - real_time_factor
+      - success
+    BatchTranscriptionResponse:
+      type: object
+      properties:
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/BatchTranscriptionResult'
+        total_processing_time:
+          type: number
+          format: double
+        total_files:
+          type: integer
+        successful_files:
+          type: integer
+        failed_files:
+          type: integer
+      required:
+      - results
+      - total_processing_time
+      - total_files
+      - successful_files
+      - failed_files

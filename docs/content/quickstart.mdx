@@ -1,0 +1,96 @@
+# Getting Started with Speech to Text
+
+With **PhosAI's STT API**, you can transcribe both pre-recorded audio files and real-time streams with conversational sub-40ms token delivery and multi-language support.
+
+Before you start, choose the path that fits your use case:
+
+---
+
+## Choose Your Path
+
+### ⚡ Streaming Audio
+**Real-time, turn-based transcription for voice agents, live captions, and meetings.**
+
+- **Key Highlights**: Continuous streaming, sub-40ms compute response, model-integrated end-of-turn detection.
+- **Use Cases**: Contact centers, conversational AI agents, live meeting transcription, voice assistants.
+- **Protocol**: Bidirectional WebSocket (`wss://stt-staging.atekervoices.com/v1/realtime`)
+- [**Explore Streaming Audio Guide →**](/streaming)
+
+---
+
+### 📁 Pre-Recorded Audio
+**High-throughput file transcription for recorded media.**
+
+- **Key Highlights**: High-speed processing at **0.25 RTF** (~4× faster than real-time), batch multi-file support.
+- **Use Cases**: Call recordings, podcasts, voicemail, lecture archives, customer support analysis.
+- **Protocol**: REST HTTP (`POST https://stt-staging.atekervoices.com/v1/transcribe`)
+- [**Explore Pre-Recorded Audio Guide →**](/batch)
+
+---
+
+## Base URLs
+
+| Environment | REST Endpoint | WebSocket Endpoint |
+| :--- | :--- | :--- |
+| **Production / Staging** | `https://stt-staging.atekervoices.com` | `wss://stt-staging.atekervoices.com/v1/realtime` |
+| **Local Development** | `http://localhost:8099` | `ws://localhost:8099/v1/realtime` |
+
+---
+
+## 30-Second Quickstart
+
+### 1. Check Service Health
+```bash
+curl -X GET "https://stt-staging.atekervoices.com/health"
+```
+
+Response:
+```json
+{
+  "status": "healthy",
+  "model": "phosai-streaming-voice-v1"
+}
+```
+
+### 2. Transcribe an Audio File (cURL)
+```bash
+curl -X POST "https://stt-staging.atekervoices.com/v1/transcribe?language=en" \
+  -H "Content-Type: audio/wav" \
+  --data-binary @sample.wav
+```
+
+### 3. Transcribe an Audio File (Python)
+```python
+import requests
+
+url = "https://stt-staging.atekervoices.com/v1/transcribe"
+params = {"language": "en"}
+
+with open("sample.wav", "rb") as f:
+    resp = requests.post(url, params=params, data=f, headers={"Content-Type": "audio/wav"})
+
+data = resp.json()
+print("Transcript:", data["text"])
+print(f"Speed: {data['real_time_factor']:.3f} RTF")
+```
+
+### 4. Real-Time Streaming (Python)
+```python
+import json, ssl, time, websocket
+
+ws = websocket.create_connection(
+    "wss://stt-staging.atekervoices.com/v1/realtime?language=en",
+    sslopt={"cert_reqs": ssl.CERT_NONE}
+)
+
+# Stream audio chunks as they are recorded (e.g. 5120 bytes)
+with open("speech.wav", "rb") as f:
+    f.seek(44) # Skip header
+    while chunk := f.read(5120):
+        ws.send_binary(chunk)
+        time.sleep(0.160)
+
+ws.send(json.dumps({"type": "flush"}))
+print("Final Transcript:", json.loads(ws.recv()).get("text"))
+ws.close()
+```

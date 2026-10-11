@@ -1,0 +1,100 @@
+{
+  "$schema": "https://registry.scalar.com/@scalar/schemas/config",
+  "scalar": "2.0.0",
+  "info": {
+    "title": "PhosAI Documentation",
+    "description": "Ultra-Low Latency Real-Time Speech-to-Text API"
+  },
+  "siteConfig": {
+    "title": "PhosAI Docs",
+    "favicon": "https://cdn.scalar.com/marketing/landing/logo-dark.svg",
+    "theme": "purple"
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "title": "Getting Started",
+        "to": "/",
+        "icon": "phosphor/regular/rocket"
+      },
+      {
+        "title": "Streaming",
+        "to": "/streaming",
+        "icon": "phosphor/regular/waveform"
+      },
+      {
+        "title": "Pre-recorded Audio",
+        "to": "/batch",
+        "icon": "phosphor/regular/files"
+      },
+      {
+        "title": "Languages",
+        "to": "/languages",
+        "icon": "phosphor/regular/translate"
+      },
+      {
+        "title": "Benchmarks",
+        "to": "/benchmarks",
+        "icon": "phosphor/regular/gauge"
+      },
+      {
+        "title": "API Reference",
+        "to": "/api",
+        "icon": "phosphor/regular/terminal-window"
+      }
+    ],
+    "header": [
+      {
+        "type": "link",
+        "title": "API Status",
+        "align": "end",
+        "to": "https://stt-staging.atekervoices.com/health"
+      },
+      {
+        "type": "link",
+        "title": "Console",
+        "style": "button",
+        "align": "end",
+        "to": "https://atekervoices.com"
+      }
+    ],
+    "routes": {
+      "/": {
+        "type": "page",
+        "filepath": "docs/content/quickstart.mdx",
+        "title": "Getting Started with Speech to Text",
+        "icon": "phosphor/regular/rocket"
+      },
+      "/streaming": {
+        "type": "page",
+        "filepath": "docs/content/streaming.mdx",
+        "title": "Real-Time Streaming",
+        "icon": "phosphor/regular/waveform"
+      },
+      "/batch": {
+        "type": "page",
+        "filepath": "docs/content/batch.mdx",
+        "title": "Pre-recorded Audio",
+        "icon": "phosphor/regular/files"
+      },
+      "/languages": {
+        "type": "page",
+        "filepath": "docs/content/languages.mdx",
+        "title": "Language Support",
+        "icon": "phosphor/regular/translate"
+      },
+      "/benchmarks": {
+        "type": "page",
+        "filepath": "docs/content/benchmarks.mdx",
+        "title": "Latency Benchmarks",
+        "icon": "phosphor/regular/gauge"
+      },
+      "/api": {
+        "type": "openapi",
+        "filepath": "docs/api-reference/openapi.yaml",
+        "title": "API Reference",
+        "icon": "phosphor/regular/terminal-window"
+      }
+    }
+  }
+}

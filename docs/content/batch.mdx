@@ -1,0 +1,78 @@
+# File & Batch Audio Transcription
+
+PhosAI supports both single-file synchronous transcription and high-throughput multi-file batch processing via the `/v1/transcribe` and `/v1/transcribe/batch` endpoints.
+
+## Highlights
+- **Real-Time Factor (RTF)**: **`0.25`** (~4× faster than real-time on GPU). A 1-minute audio file is transcribed in approximately 15 seconds.
+- **Automatic Audio Normalization**: 48kHz, 44.1kHz, stereo, and non-standard PCM formats are automatically downsampled to 16kHz mono in memory.
+- **Multipart Upload Support**: Batch upload up to dozens of files in a single HTTP POST.
+
+---
+
+## 1. Single File Transcription
+
+### Via Raw Binary
+```bash
+curl -X POST "https://stt-staging.atekervoices.com/v1/transcribe?language=en" \
+  -H "Content-Type: audio/wav" \
+  --data-binary @speech.wav
+```
+
+### Via Multipart
+```bash
+curl -X POST "https://stt-staging.atekervoices.com/v1/transcribe?language=en" \
+  -F "audio=@speech.wav"
+```
+
+**Response**:
+```json
+{
+  "text": "How do you access market information for sweet potato",
+  "processing_time": 1.052,
+  "audio_duration": 4.14,
+  "real_time_factor": 0.254,
+  "language": "en"
+}
+```
+
+---
+
+## 2. Multi-File Batch Transcription
+
+Upload multiple audio files in a single request using multipart fields:
+
+```bash
+curl -X POST "https://stt-staging.atekervoices.com/v1/transcribe?language=en" \
+  -F "file1=@call_recording_1.wav" \
+  -F "file2=@call_recording_2.wav"
+```
+
+**Response**:
+```json
+{
+  "results": [
+    {
+      "name": "call_recording_1.wav",
+      "text": "How do you access market information",
+      "processing_time": 0.82,
+      "audio_duration": 3.20,
+      "real_time_factor": 0.256,
+      "success": true,
+      "error": null
+    },
+    {
+      "name": "call_recording_2.wav",
+      "text": "Sweet potato distribution pricing",
+      "processing_time": 0.65,
+      "audio_duration": 2.50,
+      "real_time_factor": 0.260,
+      "success": true,
+      "error": null
+    }
+  ],
+  "total_processing_time": 1.47,
+  "total_files": 2,
+  "successful_files": 2,
+  "failed_files": 0
+}
+```

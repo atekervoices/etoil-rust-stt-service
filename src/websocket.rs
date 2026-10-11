@@ -71,7 +71,6 @@ pub enum WSMessage {
     Ready {
         model: String,
         supported_languages: Vec<String>,
-        chunk_size_samples: usize,
     },
 }
 
@@ -98,7 +97,7 @@ impl WebSocketHandler {
 
         // Send ready message on connection
         let ready_msg = WSMessage::Ready {
-            model: "nvidia/nemotron-3.5-asr-streaming-0.6b (Nemotron 3.5 Streaming Multilingual)".to_string(),
+            model: "phosai-streaming-voice-v1".to_string(),
             supported_languages: vec![
                 "en (English US)".to_string(),
                 "en-gb (English Commonwealth)".to_string(),
@@ -117,7 +116,6 @@ impl WebSocketHandler {
                 "sw (Swahili)".to_string(),
                 "auto (Auto-detect)".to_string(),
             ],
-            chunk_size_samples: CHUNK_SIZE,
         };
         if ws_tx
             .send(WarpMessage::text(

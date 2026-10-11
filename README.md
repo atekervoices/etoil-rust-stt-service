@@ -170,9 +170,8 @@ On successful connection, the server sends a `ready` message:
 ```json
 {
   "type": "ready",
-  "model": "nvidia/nemotron-3.5-asr-streaming-0.6b (Nemotron 3.5 Streaming Multilingual)",
-  "supported_languages": ["en", "es", "fr", "de", "it", "pt", "ru", "zh", "ja", "ko", "hi", "ar", "tr", "sw", "lg", "auto"],
-  "chunk_size_samples": 2560
+  "model": "phosai-streaming-voice-v1",
+  "supported_languages": ["en", "es", "fr", "de", "it", "pt", "ru", "zh", "ja", "ko", "hi", "ar", "tr", "sw", "auto"]
 }
 ```
 

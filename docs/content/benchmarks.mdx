@@ -1,0 +1,16 @@
+# Latency Benchmarks & Performance
+
+PhosAI benchmarks speech-to-text latency across distinct real-time conversational milestones.
+
+## Verified Latency Milestones
+
+Tested across independent trials over live WAN:
+
+| Latency Milestone | Industry Standard Range | PhosAI Measurement | Performance Advantage |
+| :--- | :--- | :--- | :--- |
+| **Time-to-First-Token (TTFB / TTFT)** | P95 ≤ 300 ms | **~38 ms compute** (132 ms WAN) | **~8× faster than cloud baselines** |
+| **Neural Step Compute Time** | 150 – 300 ms | **24.2 ms** | **Ultra-fast real-time step** |
+| **Total Transcript Latency (p50 Median)** | 200 – 500 ms | **132.6 ms** | **Sub-150ms conversational delay** |
+| **Total Transcript Latency (p95 Tail)** | < 500 ms | **153.0 ms** | **±11 ms jitter (High stability)** |
+| **End-of-Turn (EOT) Latency** | 100 – 500 ms | **372.7 ± 13.4 ms** | **Meets real-time voice agent budget** |
+| **Real-Time Factor (RTF)** | < 1.0 | **0.2545 (3.93×)** | **High throughput capacity** |
