@@ -3,17 +3,20 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        HF_TOKEN: ${HF_TOKEN:-}
     container_name: nemotron-stt-service
     ports:
       - "8099:8099"
     volumes:
-      # Model is baked directly into the image at /app/nemotron-3.5-asr-streaming-0.6b-onnx!
+      # Model is baked directly into the image at /app/nemotron-3.5-asr-streaming-luganda-onnx!
       # Optional: Uncomment below only if you wish to override with external host weights:
-      # - ./nemotron-3.5-asr-streaming-0.6b-onnx:/app/nemotron-3.5-asr-streaming-0.6b-onnx:ro
+      # - ./nemotron-3.5-asr-streaming-luganda-onnx:/app/nemotron-3.5-asr-streaming-luganda-onnx:ro
       - ./audio:/app/audio:ro
     environment:
+      - HF_TOKEN=${HF_TOKEN:-}
       - RUST_LOG=info
-      - MODEL_PATH=/app/nemotron-3.5-asr-streaming-0.6b-onnx
+      - MODEL_PATH=/app/nemotron-3.5-asr-streaming-luganda-onnx
       - PORT=8099
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
@@ -35,19 +38,22 @@ services:
       start_period: 10s
 
   # CPU-only alternative (uncomment if running without NVIDIA GPU)
-  # crane-nemotron-stt-cpu:
+  # nemotron-stt-cpu:
   #   build:
   #     context: .
   #     dockerfile: Dockerfile.cpu
-  #   container_name: crane-nemotron-stt-service-cpu
+  #     args:
+  #       HF_TOKEN: ${HF_TOKEN:-}
+  #   container_name: nemotron-stt-service-cpu
   #   ports:
   #     - "8099:8099"
   #   volumes:
   #     # Model is baked into image. Uncomment only to override with external host weights:
-  #     # - ./crane-nemo-asr-1.1-onnx:/app/crane-nemo-asr-1.1-onnx:ro
+  #     # - ./nemotron-3.5-asr-streaming-luganda-onnx:/app/nemotron-3.5-asr-streaming-luganda-onnx:ro
   #     - ./audio:/app/audio:ro
   #   environment:
+  #     - HF_TOKEN=${HF_TOKEN:-}
   #     - RUST_LOG=info
-  #     - MODEL_PATH=/app/crane-nemo-asr-1.1-onnx
+  #     - MODEL_PATH=/app/nemotron-3.5-asr-streaming-luganda-onnx
   #     - PORT=8099
   #   restart: unless-stopped

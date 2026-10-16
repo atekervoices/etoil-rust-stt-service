@@ -1,0 +1,3 @@
+# Helper scripts (model export, burn codegen and parity checks), not part of the Rust crate.
+scripts/*.py linguist-vendored
+scripts/*.sh linguist-vendored

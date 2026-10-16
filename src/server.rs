@@ -96,6 +96,7 @@ async fn health_check() -> impl warp::Reply {
             "ar (Arabic)".to_string(),
             "tr (Turkish)".to_string(),
             "sw (Swahili)".to_string(),
+            "lug (Luganda)".to_string(),
             "auto (Auto-detect)".to_string(),
         ],
     })
@@ -538,6 +539,21 @@ pub async fn run_server(service: Arc<NemotronService>, port: u16) {
             })
         });
 
+    // WebSocket alias: GET /ws (Compatibility endpoint)
+    let ws_service_alias = service.clone();
+    let ws_alias = warp::path("ws")
+        .and(warp::path::end())
+        .and(warp::ws())
+        .and(warp::query::<TranscriptionQuery>())
+        .and(warp::any().map(move || ws_service_alias.clone()))
+        .map(|ws: Ws, query: TranscriptionQuery, service: Arc<NemotronService>| {
+            let initial_lang = query.language.or(query.source_lang);
+            ws.on_upgrade(move |socket| async move {
+                let ws_handler = WebSocketHandler::new(service);
+                ws_handler.handle_websocket(socket, initial_lang).await;
+            })
+        });
+
     // OpenAPI Spec JSON: GET /docs/openapi.json
     let openapi = warp::path("docs")
         .and(warp::path("openapi.json"))
@@ -748,6 +764,7 @@ pub async fn run_server(service: Arc<NemotronService>, port: u16) {
     let routes = health
         .or(demo_ui)
         .or(realtime_ws)
+        .or(ws_alias)
         .or(transcribe_v1)
         .or(batch_transcribe)
         .or(openapi)

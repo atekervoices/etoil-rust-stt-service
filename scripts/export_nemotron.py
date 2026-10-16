@@ -104,7 +104,7 @@ parser.add_argument(
     help="Attention right context (default: 1 for ~160ms low latency; valid values per model card are 0, 1, 3, 6, 13)",
 )
 parser.add_argument(
-    "--verify-langs", default="en-US,es-ES,ja-JP",
+    "--verify-langs", default="lug,en-US,auto",
     help="Comma-separated language codes to verify ONNX output matches NeMo for",
 )
 args = parser.parse_args()
@@ -503,7 +503,7 @@ print("  Decoder saved: decoder_joint.onnx")
 # ---------------------------------------------------------------------------
 
 config = {
-    "model_name": "nemotron-3.5-asr-streaming-0.6b",
+    "model_name": "phosai/nemotron-3.5-asr-streaming-luganda",
     "sample_rate": 16000,
     "n_mels": 128,
     "subsampling_factor": subsampling_factor,

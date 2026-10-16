@@ -50,6 +50,8 @@ pub enum SupportedLanguage {
     Swedish,
     #[serde(rename = "sw")]
     Swahili,
+    #[serde(rename = "lug")]
+    Luganda,
     #[serde(rename = "auto")]
     Auto,
     Custom(String, String),
@@ -86,6 +88,9 @@ impl SupportedLanguage {
             "pl" | "pol" | "polish" | "pl-pl" | "pl_pl" => Ok(SupportedLanguage::Polish),
             "sv" | "swe" | "swedish" | "sv-se" | "sv_se" => Ok(SupportedLanguage::Swedish),
             "sw" | "swa" | "swahili" | "sw-ke" | "sw_ke" => Ok(SupportedLanguage::Swahili),
+            "lug" | "lg" | "luganda" | "lug-ug" | "lug_ug" | "ganda" => {
+                Ok(SupportedLanguage::Luganda)
+            }
             "auto" | "" | "default" => Ok(SupportedLanguage::Auto),
             other => Ok(SupportedLanguage::Custom(other.to_string(), other.to_string())),
         }
@@ -114,6 +119,7 @@ impl SupportedLanguage {
             SupportedLanguage::Polish => "pl-PL",
             SupportedLanguage::Swedish => "sv-SE",
             SupportedLanguage::Swahili => "sw-KE",
+            SupportedLanguage::Luganda => "lug",
             SupportedLanguage::Auto => "auto",
             SupportedLanguage::Custom(_, target) => target.as_str(),
         }
@@ -142,6 +148,7 @@ impl SupportedLanguage {
             SupportedLanguage::Polish => "pl",
             SupportedLanguage::Swedish => "sv",
             SupportedLanguage::Swahili => "sw",
+            SupportedLanguage::Luganda => "lug",
             SupportedLanguage::Auto => "auto",
             SupportedLanguage::Custom(code, _) => code.as_str(),
         }
@@ -170,6 +177,7 @@ impl SupportedLanguage {
             SupportedLanguage::Polish => "Polish",
             SupportedLanguage::Swedish => "Swedish",
             SupportedLanguage::Swahili => "Swahili",
+            SupportedLanguage::Luganda => "Luganda (Ganda)",
             SupportedLanguage::Auto => "Auto-Detect",
             SupportedLanguage::Custom(name, _) => name.as_str(),
         }
