@@ -325,18 +325,26 @@ async fn transcribe_explicit_batch_handler(
     }
 }
 
-pub fn create_execution_config() -> Option<parakeet_rs::ExecutionConfig> {
+pub fn create_execution_config() -> Result<parakeet_rs::ExecutionConfig, Box<dyn std::error::Error + Send + Sync>> {
+    let env = parakeet_rs::ort::init()
+        .with_name("nemotron-stt")
+        .build()?;
+
     #[cfg(feature = "cuda")]
     {
         println!("Execution backend: Requesting CUDA GPU Acceleration (ExecutionProvider::Cuda)");
         let config = parakeet_rs::ExecutionConfig::new()
+            .with_environment(env)
             .with_execution_provider(parakeet_rs::ExecutionProvider::Cuda);
-        Some(config)
+        Ok(config)
     }
     #[cfg(not(feature = "cuda"))]
     {
         println!("Execution backend: CPU (ExecutionProvider::Cpu)");
-        None
+        let config = parakeet_rs::ExecutionConfig::new()
+            .with_environment(env)
+            .with_execution_provider(parakeet_rs::ExecutionProvider::Cpu);
+        Ok(config)
     }
 }
 
@@ -349,8 +357,8 @@ impl NemotronService {
     pub async fn new(model_path: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         println!("Loading NVIDIA Nemotron model from: {model_path}");
 
-        let exec_config = create_execution_config();
-        let handle = NemotronHandle::from_pretrained(model_path, exec_config)?;
+        let exec_config = create_execution_config()?;
+        let handle = NemotronHandle::from_pretrained(model_path, Some(exec_config))?;
         println!(
             "NVIDIA Nemotron model loaded successfully! Mode: {:?}",
             handle.mode()
