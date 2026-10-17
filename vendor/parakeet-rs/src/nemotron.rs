@@ -98,7 +98,7 @@ const PROMPT_DICTIONARY: &[(&str, i64)] = &[
     ("no-NO", 27), ("ny-MW", 57), ("or-KE", 59), ("pl", 17), ("pl-PL", 17),
     ("pt", 13), ("pt-BR", 12), ("pt-PT", 13), ("qu-PE", 80), ("ro", 20),
     ("ro-RO", 20), ("ru", 11), ("ru-RU", 11), ("rw-RW", 55), ("si-LK", 45),
-    ("sk", 28), ("sk-SK", 28), ("sl", 62), ("sl-SI", 62), ("lug", 63), ("lug-UG", 63), ("lg", 63), ("sm-WS", 98),
+    ("sk", 28), ("sk-SK", 28), ("sl", 62), ("sl-SI", 62), ("sm-WS", 98),
     ("so-SO", 56), ("sv", 24), ("sv-SE", 24), ("sw-KE", 48), ("ta-IN", 39),
     ("te-IN", 40), ("tg-TJ", 70), ("th-TH", 32), ("to-TO", 99), ("tr", 18),
     ("tr-TR", 18), ("uk", 19), ("uk-UA", 19), ("ur-PK", 37), ("uz-UZ", 69),
@@ -117,18 +117,11 @@ fn is_lang_tag(piece: &str) -> bool {
     let inner = &bytes[1..bytes.len() - 1];
     match inner.len() {
         2 => inner[0].is_ascii_lowercase() && inner[1].is_ascii_lowercase(),
-        3 => inner.iter().all(|b| b.is_ascii_lowercase()),
         5 => inner[0].is_ascii_lowercase()
             && inner[1].is_ascii_lowercase()
             && inner[2] == b'-'
             && inner[3].is_ascii_uppercase()
             && inner[4].is_ascii_uppercase(),
-        6 => inner[0].is_ascii_lowercase()
-            && inner[1].is_ascii_lowercase()
-            && inner[2].is_ascii_lowercase()
-            && inner[3] == b'-'
-            && inner[4].is_ascii_uppercase()
-            && inner[5].is_ascii_uppercase(),
         _ => false,
     }
 }
@@ -555,10 +548,10 @@ impl Nemotron {
         }
         let idx = PROMPT_DICTIONARY
             .iter()
-            .find_map(|(k, v)| (k.eq_ignore_ascii_case(lang)).then_some(*v))
+            .find_map(|(k, v)| (*k == lang).then_some(*v))
             .ok_or_else(|| {
                 Error::Config(format!(
-                    "Unknown target language '{lang}'. Try one of: en-US, es-ES, de-DE, fr-FR, ja-JP, zh-CN, lug, auto, ..."
+                    "Unknown target language '{lang}'. Try one of: en-US, es-ES, de-DE, fr-FR, ja-JP, zh-CN, auto, ..."
                 ))
             })?;
         self.prompt_index = Some(idx);
@@ -583,26 +576,6 @@ impl Nemotron {
         self.accumulated_tokens.clear();
     }
 
-    /// Flush any remaining audio in buffer by zero-padding to a full chunk,
-    /// running the encoder and transducer to emit trailing tokens.
-    pub fn flush(&mut self) -> Result<String> {
-        let chunk_samples = self.chunk_samples();
-        let total_audio = self.audio_buffer.len();
-        let needed = if total_audio > self.audio_processed {
-            let rem = total_audio - self.audio_processed;
-            if rem < chunk_samples {
-                chunk_samples - rem
-            } else {
-                chunk_samples
-            }
-        } else {
-            chunk_samples
-        };
-
-        let pad = vec![0.0f32; needed + chunk_samples];
-        self.transcribe_chunk(&pad)
-    }
-
     /// Get the full accumulated transcript. Language tag tokens (e.g. `<en-US>`)
     /// emitted by the multilingual model are stripped.
     pub fn get_transcript(&self) -> String {
@@ -613,11 +586,6 @@ impl Nemotron {
             .filter(|t| *t < self.vocab_size && !self.lang_tag_ids.contains(t))
             .collect();
         self.vocab.decode(&valid)
-    }
-
-    /// Return slice of all emitted token IDs
-    pub fn accumulated_tokens(&self) -> &[usize] {
-        &self.accumulated_tokens
     }
 
     /// note that, offline transcription for testing/debugging and for some curious ppl :-). with following function too (transcribe_audio)
@@ -652,13 +620,13 @@ impl Nemotron {
 
     /// Transcribe audio samples (non-streaming)
     pub fn transcribe_audio(&mut self, audio: &[f32]) -> Result<String> {
-        self.reset();
-        let chunk_samples = self.chunk_samples();
-        for chunk in audio.chunks(chunk_samples) {
-            let _ = self.transcribe_chunk(chunk)?;
-        }
-        let _ = self.flush()?;
-        Ok(self.get_transcript())
+        let tokens = self.process_audio(audio)?;
+        let valid: Vec<usize> = tokens
+            .iter()
+            .map(|t| t.id)
+            .filter(|t| *t < self.vocab_size && !self.lang_tag_ids.contains(t))
+            .collect();
+        Ok(self.vocab.decode(&valid))
     }
 
     /// Offline companion to [`Self::transcribe_audio`] returning per-token
@@ -945,21 +913,9 @@ impl Nemotron {
                 let (max_idx, max_val) =
                     crate::tensor_utils::argmax_f32(logits.iter().copied());
 
-                if t == 0 && self.chunk_idx <= 2 {
-                    println!(
-                        "[Engine Debug] chunk={} t=0: last_token={}, blank_id={}, vocab_size={}, logits_len={}, max_idx={}, max_val={:.3}, text={:?}",
-                        self.chunk_idx, self.last_token, self.blank_id, self.vocab_size, logits.len(), max_idx, max_val, self.vocab.decode_single(max_idx)
-                    );
-                }
-
                 if max_idx == self.blank_id {
                     break;
                 }
-
-                println!(
-                    "[Engine Debug] EMITTED: id={}, text={:?}, max_val={:.3}, frame={}",
-                    max_idx, self.vocab.decode_single(max_idx), max_val, t
-                );
 
                 let logits_slice = logits
                     .as_slice()

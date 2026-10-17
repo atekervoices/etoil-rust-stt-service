@@ -100,11 +100,11 @@ parser.add_argument(
     help="Attention left context (default: 56 -- the only value this model supports)",
 )
 parser.add_argument(
-    "--right-context", type=int, default=6,
-    help="Attention right context (default: 6 for standard FastConformer streaming; valid values per model card are 0, 1, 3, 6, 13)",
+    "--right-context", type=int, default=1,
+    help="Attention right context (default: 1 for ~160ms low latency; valid values per model card are 0, 1, 3, 6, 13)",
 )
 parser.add_argument(
-    "--verify-langs", default="lug,en-US,auto",
+    "--verify-langs", default="en-US,es-ES,ja-JP",
     help="Comma-separated language codes to verify ONNX output matches NeMo for",
 )
 args = parser.parse_args()
@@ -275,10 +275,6 @@ os.unlink(temp_wav.name)
 prompt_dict = OmegaConf.to_container(
     model.cfg.model_defaults.prompt_dictionary, resolve=True
 )
-# Ensure Luganda prompt mappings are present (prompt slot 63 in phosai/nemotron-3.5-asr-streaming-luganda)
-prompt_dict.setdefault("lug", 63)
-prompt_dict.setdefault("lug-UG", 63)
-prompt_dict.setdefault("lg", 63)
 print(f"\nprompt_dictionary: {len(prompt_dict)} entries")
 
 # ---------------------------------------------------------------------------
@@ -507,7 +503,7 @@ print("  Decoder saved: decoder_joint.onnx")
 # ---------------------------------------------------------------------------
 
 config = {
-    "model_name": "phosai/nemotron-3.5-asr-streaming-luganda",
+    "model_name": "nemotron-3.5-asr-streaming-0.6b",
     "sample_rate": 16000,
     "n_mels": 128,
     "subsampling_factor": subsampling_factor,
@@ -577,13 +573,7 @@ for lang in VERIFY_LANGS:
     idx = prompt_dict[lang]
 
     # NeMo reference path
-    try:
-        model.set_inference_prompt(lang)
-    except Exception:
-        if hasattr(model, "_inference_prompt_index"):
-            model._inference_prompt_index = idx
-        elif hasattr(model, "set_inference_prompt_by_index"):
-            model.set_inference_prompt_by_index(idx)
+    model.set_inference_prompt(lang)
     with torch.no_grad():
         e_raw, e_len, _, _, _ = model.encoder.cache_aware_stream_step(
             processed_signal=processed_signal,

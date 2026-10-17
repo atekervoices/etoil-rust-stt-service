@@ -153,27 +153,7 @@ impl NemotronModel {
             pre_encode_cache: 9,
         };
 
-        // Latency profile from config.json or ONNX metadata
-        if let Ok(config_file) = std::fs::File::open(model_dir.join("config.json")) {
-            if let Ok(json) = serde_json::from_reader::<_, serde_json::Value>(config_file) {
-                if let Some(v) = json.get("chunk_size_output_frames").and_then(|v| v.as_u64()) {
-                    if v > 0 {
-                        config.chunk_size_output_frames = v as usize;
-                    }
-                }
-                if let Some(v) = json.get("pre_encode_cache").and_then(|v| v.as_u64()) {
-                    if v > 0 {
-                        config.pre_encode_cache = v as usize;
-                    }
-                }
-                if let Some(v) = json.get("left_context").and_then(|v| v.as_u64()) {
-                    if v > 0 {
-                        config.left_context = v as usize;
-                    }
-                }
-            }
-        }
-
+        // Latency profile from ONNX metadata
         if let Some(v) = metadata
             .get("chunk_size_output_frames")
             .and_then(|v| v.parse::<usize>().ok())

@@ -1,14 +1,16 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>PHOSAI Nemotron 3.5 Streaming ASR (Luganda)</title>
+    <title>Nemotron 3.5 Streaming ASR</title>
 </head>
+
 <body>
     <header>
         <h1>etoil-rust-stt-service</h1>
-        <p>PHOSAI Nemotron 3.5 Streaming ASR (Luganda & Multilingual FastConformer RNN-T 0.6B)</p>
+        <p>NVIDIA Nemotron 3.5 Streaming ASR (FastConformer RNN-T 0.6B)</p>
         <p>Status: <strong id="wsStatusText">Disconnected</strong></p>
     </header>
     <hr>
@@ -17,10 +19,8 @@
         <div>
             <label for="langSelect">Target Language: </label>
             <select id="langSelect">
-                <option value="lug" selected>Luganda (Oluganda) - lug</option>
-                <option value="en-gb">English (UK / Commonwealth / East Africa) - en-GB</option>
+                <option value="en-gb" selected>English (UK / Commonwealth / East Africa) - en-GB</option>
                 <option value="en">English (US) - en-US</option>
-                <option value="sw">Swahili (Kiswahili) - sw-KE</option>
                 <option value="es">Spanish (Español) - es-ES</option>
                 <option value="fr">French (Français) - fr-FR</option>
                 <option value="de">German (Deutsch) - de-DE</option>
@@ -34,6 +34,7 @@
                 <option value="ar">Arabic (العربية) - ar-AR</option>
                 <option value="tr">Turkish (Türkçe) - tr-TR</option>
                 <option value="vi">Vietnamese (Tiếng Việt) - vi-VN</option>
+                <option value="sw">Swahili (Kiswahili) - sw-KE</option>
                 <option value="auto">Auto-Detect (auto)</option>
             </select>
         </div>
@@ -53,16 +54,17 @@
 
         <div>
             <p>
-                <strong>Chunk Size:</strong> 160 ms | 
-                <strong>Sample Rate:</strong> 16,000 Hz | 
-                <strong>Samples / Chunk:</strong> 2,560 | 
-                <strong>Active Language:</strong> <span id="activeLangDisplay">lug</span>
+                <strong>Chunk Size:</strong> 160 ms |
+                <strong>Sample Rate:</strong> 16,000 Hz |
+                <strong>Samples / Chunk:</strong> 2,560 |
+                <strong>Active Language:</strong> <span id="activeLangDisplay">en-gb</span>
             </p>
         </div>
 
         <div>
             <h3>Transcription Stream</h3>
-            <div id="transcriptBox" style="border: 1px solid #999; padding: 12px; min-height: 120px; max-height: 400px; overflow-y: auto; font-family: monospace;">
+            <div id="transcriptBox"
+                style="border: 1px solid #999; padding: 12px; min-height: 120px; max-height: 400px; overflow-y: auto; font-family: monospace;">
                 <span id="placeholder" style="color: #666;">Click "Start Microphone" and speak...</span>
                 <span id="confirmedText"></span>
                 <span id="partialText" style="color: #0066cc;"></span>
@@ -89,7 +91,7 @@
         let processor = null;
         let isRecording = false;
 
-        const CHUNK_SIZE = 8960; // 560ms at 16kHz
+        const CHUNK_SIZE = 2560; // 160ms at 16kHz
 
         function connectWebSocket() {
             const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -293,4 +295,5 @@
         connectWebSocket();
     </script>
 </body>
+
 </html>

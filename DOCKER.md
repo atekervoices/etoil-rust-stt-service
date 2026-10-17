@@ -1,50 +1,35 @@
 # Docker Deployment Guide
 
-This guide explains how to deploy the PHOSAI Nemotron 3.5 Streaming ASR service (Luganda & Multilingual) using Docker.
+This guide explains how to deploy the Crane Nemotron Streaming ASR service (Luganda & English) with Earshot Neural VAD using Docker.
 
 ## Prerequisites
 
 ### For GPU Support (Recommended)
 - NVIDIA GPU (CUDA compatible)
 - NVIDIA drivers installed
-- Docker & Docker Compose installed
+- Docker installed
 - NVIDIA Container Toolkit (`nvidia-docker2`) installed
-- **Hugging Face Token** (`HF_TOKEN`): required because `phosai/nemotron-3.5-asr-streaming-luganda` is a private repository.
 
 ### For CPU-Only
 - Docker installed
-- **Hugging Face Token** (`HF_TOKEN`)
 
 ---
 
-## Quick Start (Docker Compose)
+## Quick Start
 
-1. **Configure your Hugging Face Token:**
-Create a `.env` file from `.env.example`:
-```bash
-cp .env.example .env
-```
-Edit `.env` and set your token:
-```env
-HF_TOKEN=hf_your_actual_token_here
-```
+### With GPU Support (CUDA Acceleration)
 
-2. **Build and start service:**
+1. **Build and start service:**
 ```bash
-docker compose build --build-arg HF_TOKEN=${HF_TOKEN}
 docker compose up -d
 ```
-Or simply:
-```bash
-HF_TOKEN=hf_your_actual_token_here docker compose up -d --build
-```
 
-3. **Check logs:**
+2. **Check logs:**
 ```bash
 docker compose logs -f
 ```
 
-4. **Verify health check:**
+3. **Verify health check:**
 ```bash
 curl http://localhost:8099/health
 ```
@@ -53,26 +38,11 @@ Expected output:
 ```json
 {
   "status": "healthy",
-  "model": "phosai-streaming-voice-v1",
-  "supported_languages": [
-    "en (English US)",
-    "en-gb (English Commonwealth)",
-    "es (Spanish)",
-    "fr (French)",
-    "de (German)",
-    "it (Italian)",
-    "pt (Portuguese)",
-    "ru (Russian)",
-    "zh (Chinese)",
-    "ja (Japanese)",
-    "ko (Korean)",
-    "hi (Hindi)",
-    "ar (Arabic)",
-    "tr (Turkish)",
-    "sw (Swahili)",
-    "lug (Luganda)",
-    "auto (Auto-detect)"
-  ]
+  "model": "CraneAILabs/crane-nemo-asr-1.1 (Nemotron 3.5 Streaming)",
+  "supported_languages": ["lg (Luganda)", "en (English)", "auto (Auto-detect)"],
+  "excluded_languages": ["sn (Shona - disabled)"],
+  "chunk_size_samples": 8960,
+  "chunk_duration_ms": 560
 }
 ```
 
@@ -80,22 +50,16 @@ Expected output:
 
 ## Manual Docker Commands
 
-### 1. Build Docker Images with HF_TOKEN
+### 1. Build Docker Images
 
 **GPU version (CUDA):**
 ```bash
-docker build \
-  --build-arg HF_TOKEN=hf_your_token_here \
-  -t nemotron-stt:latest \
-  -f Dockerfile .
+docker build -t crane-nemotron-stt:latest -f Dockerfile .
 ```
 
 **CPU version:**
 ```bash
-docker build \
-  --build-arg HF_TOKEN=hf_your_token_here \
-  -t nemotron-stt:cpu \
-  -f Dockerfile.cpu .
+docker build -t crane-nemotron-stt:cpu -f Dockerfile.cpu .
 ```
 
 ### 2. Run Container (No Host Volumes Required)
@@ -105,25 +69,25 @@ Because the model weights and Rust binary are both baked into the container duri
 **GPU Version (CUDA):**
 ```bash
 docker run -d \
-  --name nemotron-stt \
+  --name crane-nemotron-stt \
   --gpus all \
   -p 8099:8099 \
-  nemotron-stt:latest
+  crane-nemotron-stt:latest
 ```
 
 **CPU Version:**
 ```bash
 docker run -d \
-  --name nemotron-stt \
+  --name crane-nemotron-stt \
   -p 8099:8099 \
-  nemotron-stt:cpu
+  crane-nemotron-stt:cpu
 ```
 
-*(Optional: If you ever want to override the baked-in model with external weights, you can pass `-v $(pwd)/custom-model:/app/nemotron-3.5-asr-streaming-luganda-onnx:ro`)*
+*(Optional: If you ever want to override the baked-in model with external weights, you can pass `-v $(pwd)/custom-model:/app/crane-nemo-asr-1.1-onnx:ro`)*
 
 ---
 
-## Testing Endpoints
+## Testing Containerized Endpoints
 
 ### 1. Health Check
 ```bash
@@ -133,22 +97,33 @@ curl http://localhost:8099/health
 ### 2. Luganda Transcription (Single File)
 ```bash
 curl -X POST \
-  "http://localhost:8099/v1/transcribe?language=lug" \
+  "http://localhost:8099/v1/transcribe?language=lg" \
   -H "Content-Type: application/octet-stream" \
   --data-binary @audio/luganda_sample.wav
 ```
-*(Also accepts `language=lg` or `language=luganda`)*
 
 ### 3. Batch Transcription (Multiple Files)
 ```bash
 curl -X POST \
-  "http://localhost:8099/v1/transcribe/batch?language=lug" \
+  "http://localhost:8099/v1/transcribe/batch?language=en" \
   -F "file1=@audio/sample1.wav" \
   -F "file2=@audio/sample2.wav"
 ```
 
-### 4. WebSocket Streaming & Documentation
-- **Live WebSocket (Luganda)**: `ws://localhost:8099/v1/realtime?language=lug`
+### 4. Verify Shona is Excluded
+```bash
+curl -X POST \
+  "http://localhost:8099/v1/transcribe?language=sn" \
+  -H "Content-Type: application/octet-stream" \
+  --data-binary @audio/sample.wav
+```
+Response:
+```json
+{"error": "Language 'shona' (sn) is explicitly disabled in this service configuration."}
+```
+
+### 5. WebSocket Streaming & Documentation
+- **Live WebSocket**: `ws://localhost:8099/v1/realtime?language=lg`
 - **Interactive Documentation**: `http://localhost:8099/docs`
 - **OpenAPI 3.0 Spec**: `http://localhost:8099/docs/openapi.json`
 - **Web Demo Interface**: `http://localhost:8099/`

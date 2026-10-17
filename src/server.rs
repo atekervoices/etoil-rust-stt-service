@@ -96,7 +96,6 @@ async fn health_check() -> impl warp::Reply {
             "ar (Arabic)".to_string(),
             "tr (Turkish)".to_string(),
             "sw (Swahili)".to_string(),
-            "lug (Luganda)".to_string(),
             "auto (Auto-detect)".to_string(),
         ],
     })
@@ -120,7 +119,7 @@ fn resample_to_16k(samples: &[f32], src_rate: u32) -> Vec<f32> {
     resampled
 }
 
-pub fn parse_audio_samples(data: &[u8]) -> Result<Vec<f32>, String> {
+fn parse_audio_samples(data: &[u8]) -> Result<Vec<f32>, String> {
     // Check if data is a WAV file container
     if data.starts_with(b"RIFF") && data.len() > 44 {
         let cursor = std::io::Cursor::new(data);
@@ -393,12 +392,34 @@ impl NemotronService {
             model.set_target_lang(language.to_nemotron_lang())?;
         }
 
-        let chunk_samples = model.chunk_samples();
-        for chunk in samples.chunks(chunk_samples) {
-            let _ = model.transcribe_chunk(chunk)?;
+        let mut full_text = String::new();
+
+        // Process in 160ms chunks (2560 samples)
+        for chunk in samples.chunks(CHUNK_SIZE) {
+            let chunk_data: Vec<f32> = if chunk.len() < CHUNK_SIZE {
+                let mut padded = chunk.to_vec();
+                padded.resize(CHUNK_SIZE, 0.0);
+                padded
+            } else {
+                chunk.to_vec()
+            };
+
+            let delta = model.transcribe_chunk(&chunk_data)?;
+            if !delta.is_empty() {
+                full_text.push_str(&delta);
+            }
         }
-        let _ = model.flush()?;
-        let full_text = model.get_transcript();
+
+        // Flush 3 chunks to release lookahead tokens from RNNT joint network
+        let flush_chunk = vec![0.0f32; CHUNK_SIZE];
+        for _ in 0..3 {
+            let delta_res: Result<String, _> = model.transcribe_chunk(&flush_chunk);
+            if let Ok(flush_delta) = delta_res {
+                if !flush_delta.is_empty() {
+                    full_text.push_str(&flush_delta);
+                }
+            }
+        }
 
         let processing_time = start_time.elapsed().as_secs_f64();
         let real_time_factor = if audio_duration > 0.0 {
@@ -406,19 +427,6 @@ impl NemotronService {
         } else {
             0.0
         };
-
-        println!(
-            "[POST /v1/transcribe] Audio: {:.2}s ({} samples) | Processing: {:.2}s (RTF: {:.3}) | Lang: {} (Nemotron target: '{}') | Tokens({}): {:?} | Result: \"{}\"",
-            audio_duration,
-            samples.len(),
-            processing_time,
-            real_time_factor,
-            language.code(),
-            language.to_nemotron_lang(),
-            model.accumulated_tokens().len(),
-            model.accumulated_tokens(),
-            full_text.trim()
-        );
 
         Ok(TranscriptionResponse {
             text: full_text.trim().to_string(),

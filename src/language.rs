@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-/// Audio streaming constants for Nemotron 3.5 cache-aware ASR (right-context 6 = 560ms)
+/// Audio streaming constants for Nemotron 3.5 cache-aware ASR
 pub const SAMPLE_RATE: usize = 16000;
-pub const CHUNK_DURATION_MS: usize = 560;
-/// 560ms chunks at 16kHz = 8960 audio samples
-pub const CHUNK_SIZE: usize = 8960;
+pub const CHUNK_DURATION_MS: usize = 160;
+/// 160ms chunks at 16kHz = 2560 audio samples
+pub const CHUNK_SIZE: usize = 2560;
 
 /// Languages supported by NVIDIA Nemotron 3.5 Streaming Multilingual ASR
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -50,8 +50,6 @@ pub enum SupportedLanguage {
     Swedish,
     #[serde(rename = "sw")]
     Swahili,
-    #[serde(rename = "lug")]
-    Luganda,
     #[serde(rename = "auto")]
     Auto,
     Custom(String, String),
@@ -88,9 +86,6 @@ impl SupportedLanguage {
             "pl" | "pol" | "polish" | "pl-pl" | "pl_pl" => Ok(SupportedLanguage::Polish),
             "sv" | "swe" | "swedish" | "sv-se" | "sv_se" => Ok(SupportedLanguage::Swedish),
             "sw" | "swa" | "swahili" | "sw-ke" | "sw_ke" => Ok(SupportedLanguage::Swahili),
-            "lug" | "lg" | "luganda" | "lug-ug" | "lug_ug" | "ganda" => {
-                Ok(SupportedLanguage::Luganda)
-            }
             "auto" | "" | "default" => Ok(SupportedLanguage::Auto),
             other => Ok(SupportedLanguage::Custom(other.to_string(), other.to_string())),
         }
@@ -119,7 +114,6 @@ impl SupportedLanguage {
             SupportedLanguage::Polish => "pl-PL",
             SupportedLanguage::Swedish => "sv-SE",
             SupportedLanguage::Swahili => "sw-KE",
-            SupportedLanguage::Luganda => "lug",
             SupportedLanguage::Auto => "auto",
             SupportedLanguage::Custom(_, target) => target.as_str(),
         }
@@ -148,7 +142,6 @@ impl SupportedLanguage {
             SupportedLanguage::Polish => "pl",
             SupportedLanguage::Swedish => "sv",
             SupportedLanguage::Swahili => "sw",
-            SupportedLanguage::Luganda => "lug",
             SupportedLanguage::Auto => "auto",
             SupportedLanguage::Custom(code, _) => code.as_str(),
         }
@@ -177,7 +170,6 @@ impl SupportedLanguage {
             SupportedLanguage::Polish => "Polish",
             SupportedLanguage::Swedish => "Swedish",
             SupportedLanguage::Swahili => "Swahili",
-            SupportedLanguage::Luganda => "Luganda (Ganda)",
             SupportedLanguage::Auto => "Auto-Detect",
             SupportedLanguage::Custom(name, _) => name.as_str(),
         }
@@ -186,7 +178,7 @@ impl SupportedLanguage {
 
 impl Default for SupportedLanguage {
     fn default() -> Self {
-        SupportedLanguage::Luganda
+        SupportedLanguage::Auto
     }
 }
 

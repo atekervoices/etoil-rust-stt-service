@@ -21,7 +21,7 @@ cuda = ["parakeet-rs/cuda", "dep:ort", "ort/cuda", "ort/copy-dylibs"]
 
 [dependencies]
 ort = { version = "2.0.0-rc.13", default-features = false, features = ["std", "ndarray", "copy-dylibs"], optional = true }
-parakeet-rs = { path = "./vendor/parakeet-rs", default-features = false, features = ["cpu", "ort-defaults"] }
+parakeet-rs = { git = "https://github.com/altunenes/parakeet-rs.git", default-features = false, features = ["cpu", "ort-defaults"] }
 hound = "3.5"
 cpal = "0.17.3"
 tokio = { version = "1.0", features = ["full"] }

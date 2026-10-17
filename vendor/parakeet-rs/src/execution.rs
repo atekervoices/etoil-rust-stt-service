@@ -224,16 +224,13 @@ impl ModelConfig {
     /// Build a session for `path` under this configuration.
     #[cfg(feature = "ort")]
     pub fn build_session(&self, path: &Path) -> Result<Session> {
-        let env_owned;
-        let environment = match &self.environment {
-            Some(env) => env,
-            None => {
-                env_owned = ort::init()
-                    .with_name("parakeet-rs")
-                    .build()
-                    .map_err(|e| crate::error::Error::Config(format!("Failed to initialize default ONNX Runtime environment: {e}")))?;
-                &env_owned
-            }
+        let Some(environment) = &self.environment else {
+            return Err(crate::error::Error::Config(
+                "ONNX Runtime needs an environment: create one with \
+                 `parakeet_rs::ort::init().build()?` and pass it with \
+                 `ExecutionConfig::new().with_environment(env)`"
+                    .into(),
+            ));
         };
         let builder = Session::builder(environment)?;
         let mut builder = self.apply_to_session_builder(builder)?;
