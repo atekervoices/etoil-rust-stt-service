@@ -49,8 +49,8 @@ COPY scripts/export_nemotron.py /export/export_nemotron.py
 # Download PHOSAI Nemotron Luganda model (.nemo) from Hugging Face
 RUN python3 /export/download_model.py --output-dir /export/models
 
-# Export PHOSAI Nemotron .nemo to parakeet-rs ONNX format with 160ms streaming (right-context=1)
-RUN python3 /export/export_nemotron.py /export/models/nemotron-asr-streaming-luganda.nemo /export/nemotron-3.5-asr-streaming-luganda-onnx --right-context 1
+# Export PHOSAI Nemotron .nemo to parakeet-rs ONNX format with standard FastConformer streaming lookahead (right-context=6)
+RUN python3 /export/export_nemotron.py /export/models/nemotron-asr-streaming-luganda.nemo /export/nemotron-3.5-asr-streaming-luganda-onnx --right-context 6
 
 # Clean up raw .nemo checkpoint to minimize disk usage
 RUN rm -rf /export/models

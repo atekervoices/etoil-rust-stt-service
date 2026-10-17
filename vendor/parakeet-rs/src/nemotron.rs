@@ -117,11 +117,18 @@ fn is_lang_tag(piece: &str) -> bool {
     let inner = &bytes[1..bytes.len() - 1];
     match inner.len() {
         2 => inner[0].is_ascii_lowercase() && inner[1].is_ascii_lowercase(),
+        3 => inner.iter().all(|b| b.is_ascii_lowercase()),
         5 => inner[0].is_ascii_lowercase()
             && inner[1].is_ascii_lowercase()
             && inner[2] == b'-'
             && inner[3].is_ascii_uppercase()
             && inner[4].is_ascii_uppercase(),
+        6 => inner[0].is_ascii_lowercase()
+            && inner[1].is_ascii_lowercase()
+            && inner[2].is_ascii_lowercase()
+            && inner[3] == b'-'
+            && inner[4].is_ascii_uppercase()
+            && inner[5].is_ascii_uppercase(),
         _ => false,
     }
 }
@@ -574,6 +581,26 @@ impl Nemotron {
         self.audio_processed = 0;
         self.chunk_idx = 0;
         self.accumulated_tokens.clear();
+    }
+
+    /// Flush any remaining audio in buffer by zero-padding to a full chunk,
+    /// running the encoder and transducer to emit trailing tokens.
+    pub fn flush(&mut self) -> Result<String> {
+        let chunk_samples = self.chunk_samples();
+        let total_audio = self.audio_buffer.len();
+        let needed = if total_audio > self.audio_processed {
+            let rem = total_audio - self.audio_processed;
+            if rem < chunk_samples {
+                chunk_samples - rem
+            } else {
+                chunk_samples
+            }
+        } else {
+            chunk_samples
+        };
+
+        let pad = vec![0.0f32; needed + chunk_samples];
+        self.transcribe_chunk(&pad)
     }
 
     /// Get the full accumulated transcript. Language tag tokens (e.g. `<en-US>`)

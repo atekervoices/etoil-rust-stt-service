@@ -120,7 +120,7 @@ fn resample_to_16k(samples: &[f32], src_rate: u32) -> Vec<f32> {
     resampled
 }
 
-fn parse_audio_samples(data: &[u8]) -> Result<Vec<f32>, String> {
+pub fn parse_audio_samples(data: &[u8]) -> Result<Vec<f32>, String> {
     // Check if data is a WAV file container
     if data.starts_with(b"RIFF") && data.len() > 44 {
         let cursor = std::io::Cursor::new(data);
@@ -393,34 +393,7 @@ impl NemotronService {
             model.set_target_lang(language.to_nemotron_lang())?;
         }
 
-        let mut full_text = String::new();
-
-        // Process in 160ms chunks (2560 samples)
-        for chunk in samples.chunks(CHUNK_SIZE) {
-            let chunk_data: Vec<f32> = if chunk.len() < CHUNK_SIZE {
-                let mut padded = chunk.to_vec();
-                padded.resize(CHUNK_SIZE, 0.0);
-                padded
-            } else {
-                chunk.to_vec()
-            };
-
-            let delta = model.transcribe_chunk(&chunk_data)?;
-            if !delta.is_empty() {
-                full_text.push_str(&delta);
-            }
-        }
-
-        // Flush 3 chunks to release lookahead tokens from RNNT joint network
-        let flush_chunk = vec![0.0f32; CHUNK_SIZE];
-        for _ in 0..3 {
-            let delta_res: Result<String, _> = model.transcribe_chunk(&flush_chunk);
-            if let Ok(flush_delta) = delta_res {
-                if !flush_delta.is_empty() {
-                    full_text.push_str(&flush_delta);
-                }
-            }
-        }
+        let full_text = model.transcribe_audio(&samples)?;
 
         let processing_time = start_time.elapsed().as_secs_f64();
         let real_time_factor = if audio_duration > 0.0 {

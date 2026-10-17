@@ -186,7 +186,7 @@ impl SupportedLanguage {
 
 impl Default for SupportedLanguage {
     fn default() -> Self {
-        SupportedLanguage::Auto
+        SupportedLanguage::Luganda
     }
 }
 

@@ -88,7 +88,7 @@ impl WebSocketHandler {
         let (mut ws_tx, mut ws_rx) = ws.split();
         let (tx, mut rx) = mpsc::channel::<WSMessage>(100);
 
-        let mut active_language = SupportedLanguage::Auto;
+        let mut active_language = SupportedLanguage::Luganda;
         if let Some(ref l) = initial_language {
             if let Ok(parsed) = SupportedLanguage::parse(l) {
                 active_language = parsed;
@@ -99,6 +99,7 @@ impl WebSocketHandler {
         let ready_msg = WSMessage::Ready {
             model: "phosai-streaming-voice-v1".to_string(),
             supported_languages: vec![
+                "lug (Luganda)".to_string(),
                 "en (English US)".to_string(),
                 "en-gb (English Commonwealth)".to_string(),
                 "es (Spanish)".to_string(),
@@ -208,6 +209,14 @@ impl WebSocketHandler {
                                                     .await;
                                             }
                                         }
+
+                                        // Reset model and buffers so new language starts cleanly
+                                        audio_buffer.clear();
+                                        accumulated_transcript.clear();
+                                        last_emitted_text.clear();
+                                        last_emitted_final.clear();
+                                        silent_chunks_count = 0;
+                                        model.reset();
                                     }
                                     Err(err) => {
                                         let _ = tx.send(WSMessage::Error { message: err }).await;
@@ -231,10 +240,18 @@ impl WebSocketHandler {
                                     }
                                 };
 
-                                // Convert 16-bit PCM LE to f32 samples
-                                for chunk in audio_bytes.chunks_exact(2) {
-                                    let sample =
-                                        i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0;
+                                // Check if audio bytes contain a WAV header or raw PCM16
+                                let samples = match crate::server::parse_audio_samples(&audio_bytes) {
+                                    Ok(s) => s,
+                                    Err(_) => {
+                                        let mut s = Vec::with_capacity(audio_bytes.len() / 2);
+                                        for chunk in audio_bytes.chunks_exact(2) {
+                                            s.push(i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0);
+                                        }
+                                        s
+                                    }
+                                };
+                                for sample in samples {
                                     audio_buffer.push_back(sample);
                                 }
                                 new_audio_received = true;
@@ -265,22 +282,16 @@ impl WebSocketHandler {
                             }
 
                             WSMessage::End | WSMessage::Flush => {
-                                // Process any remaining audio in the buffer
+                                // Feed any remaining audio in the buffer to model
                                 if !audio_buffer.is_empty() {
-                                    let mut final_chunk: Vec<f32> = audio_buffer.drain(..).collect();
-                                    final_chunk.resize(CHUNK_SIZE, 0.0);
-                                    let delta_res: Result<String, _> = model.transcribe_chunk(&final_chunk);
-                                    if let Ok(delta) = delta_res {
+                                    let remaining: Vec<f32> = audio_buffer.drain(..).collect();
+                                    if let Ok(delta) = model.transcribe_chunk(&remaining) {
                                         accumulated_transcript.push_str(&delta);
                                     }
                                 }
-                                // Flush trailing lookahead tokens (right-context flush)
-                                let flush_chunk = vec![0.0f32; CHUNK_SIZE];
-                                for _ in 0..2 {
-                                    let delta_res: Result<String, _> = model.transcribe_chunk(&flush_chunk);
-                                    if let Ok(delta) = delta_res {
-                                        accumulated_transcript.push_str(&delta);
-                                    }
+                                // Flush trailing lookahead tokens from joint network
+                                if let Ok(flush_delta) = model.flush() {
+                                    accumulated_transcript.push_str(&flush_delta);
                                 }
                                 model.reset();
 
@@ -332,11 +343,19 @@ impl WebSocketHandler {
                             _ => {}
                         }
                     } else if message.is_binary() {
-                        // Support direct raw PCM 16-bit little-endian binary streaming
+                        // Support direct raw PCM 16-bit or WAV container binary streaming
                         let audio_bytes = message.as_bytes();
-                        for chunk in audio_bytes.chunks_exact(2) {
-                            let sample =
-                                i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0;
+                        let samples = match crate::server::parse_audio_samples(audio_bytes) {
+                            Ok(s) => s,
+                            Err(_) => {
+                                let mut s = Vec::with_capacity(audio_bytes.len() / 2);
+                                for chunk in audio_bytes.chunks_exact(2) {
+                                    s.push(i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0);
+                                }
+                                s
+                            }
+                        };
+                        for sample in samples {
                             audio_buffer.push_back(sample);
                         }
                         new_audio_received = true;
@@ -387,9 +406,7 @@ impl WebSocketHandler {
                                             // After ~800ms (5 chunks of 160ms) of pause after speech, finalize sentence
                                             if silent_chunks_count >= 5 {
                                                 // Flush trailing lookahead tokens
-                                                let flush_chunk = vec![0.0f32; CHUNK_SIZE];
-                                                let delta_res: Result<String, _> = model.transcribe_chunk(&flush_chunk);
-                                                if let Ok(flush_delta) = delta_res {
+                                                if let Ok(flush_delta) = model.flush() {
                                                     if !flush_delta.is_empty() {
                                                         accumulated_transcript.push_str(&flush_delta);
                                                     }
