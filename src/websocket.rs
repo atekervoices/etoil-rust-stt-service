@@ -269,22 +269,22 @@ impl WebSocketHandler {
                                 if !audio_buffer.is_empty() {
                                     let mut final_chunk: Vec<f32> = audio_buffer.drain(..).collect();
                                     final_chunk.resize(CHUNK_SIZE, 0.0);
-                                    let delta_res: Result<String, _> = model.transcribe_chunk(&final_chunk);
-                                    if let Ok(delta) = delta_res {
-                                        accumulated_transcript.push_str(&delta);
-                                    }
+                                    let _ = model.transcribe_chunk(&final_chunk);
                                 }
                                 // Flush trailing lookahead tokens (right-context flush)
                                 let flush_chunk = vec![0.0f32; CHUNK_SIZE];
                                 for _ in 0..2 {
-                                    let delta_res: Result<String, _> = model.transcribe_chunk(&flush_chunk);
-                                    if let Ok(delta) = delta_res {
-                                        accumulated_transcript.push_str(&delta);
-                                    }
+                                    let _ = model.transcribe_chunk(&flush_chunk);
                                 }
+
+                                let model_transcript = model.get_transcript();
+                                let final_text = if !model_transcript.is_empty() {
+                                    model_transcript
+                                } else {
+                                    accumulated_transcript.trim().to_string()
+                                };
                                 model.reset();
 
-                                let final_text = accumulated_transcript.trim().to_string();
                                 if !final_text.is_empty() {
                                     // Server-side deduplication (Modal pattern):
                                     // Only emit the delta if final_text starts with last_emitted_final
@@ -326,7 +326,6 @@ impl WebSocketHandler {
                                 accumulated_transcript.clear();
                                 last_emitted_text.clear();
                                 silent_chunks_count = 0;
-                                model.reset();
                             }
 
                             _ => {}

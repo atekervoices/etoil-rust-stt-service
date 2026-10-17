@@ -591,7 +591,14 @@ impl Nemotron {
             .copied()
             .filter(|t| *t < self.vocab_size && !self.lang_tag_ids.contains(t))
             .collect();
-        self.vocab.decode(&valid)
+        let text = self.vocab.decode(&valid);
+        println!(
+            "[nemotron-engine get_transcript] acc_tokens: {}, valid_speech_tokens: {}, decoded: \"{}\"",
+            self.accumulated_tokens.len(),
+            valid.len(),
+            text
+        );
+        text
     }
 
     /// note that, offline transcription for testing/debugging and for some curious ppl :-). with following function too (transcribe_audio)
@@ -632,7 +639,14 @@ impl Nemotron {
             .map(|t| t.id)
             .filter(|t| *t < self.vocab_size && !self.lang_tag_ids.contains(t))
             .collect();
-        Ok(self.vocab.decode(&valid))
+        let text = self.vocab.decode(&valid);
+        println!(
+            "[nemotron-engine] transcribe_audio: raw tokens: {}, valid speech tokens: {}, text: \"{}\"",
+            tokens.len(),
+            valid.len(),
+            text
+        );
+        Ok(text)
     }
 
     /// Offline companion to [`Self::transcribe_audio`] returning per-token
@@ -748,6 +762,42 @@ impl Nemotron {
             encoder_frame_base += enc_len as usize;
             buffer_idx += self.chunk_size;
             chunk_idx += 1;
+        }
+
+        // Flush right-context lookahead frames to release trailing tokens
+        if chunk_idx > 0 {
+            let expected_size = self.pre_encode_cache + self.chunk_size;
+            let mut chunk_data = vec![0.0f32; N_MELS * expected_size];
+            if buffer_idx >= self.pre_encode_cache {
+                let cache_start = buffer_idx - self.pre_encode_cache;
+                for f in 0..self.pre_encode_cache {
+                    for m in 0..N_MELS {
+                        if cache_start + f < total_frames {
+                            chunk_data[m * expected_size + f] = mel[[m, cache_start + f]];
+                        }
+                    }
+                }
+            }
+
+            if let Ok(mel_chunk) = Array3::from_shape_vec((1, N_MELS, expected_size), chunk_data) {
+                if let Ok(mut model) = self.model.lock() {
+                    if let Ok((encoded, enc_len, new_cache)) = model.run_encoder(
+                        &mel_chunk,
+                        expected_size as i64,
+                        &self.encoder_cache,
+                        self.prompt_index,
+                    ) {
+                        self.encoder_cache = new_cache;
+                        drop(model);
+                        if let Ok(mut flush_tokens) = self.decode_chunk_tokens(&encoded, enc_len as usize) {
+                            for token in &mut flush_tokens {
+                                token.local_frame += encoder_frame_base;
+                            }
+                            all_tokens.extend(flush_tokens);
+                        }
+                    }
+                }
+            }
         }
 
         Ok(all_tokens)
