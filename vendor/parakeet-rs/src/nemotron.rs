@@ -697,6 +697,13 @@ impl Nemotron {
 
         let mel = self.compute_mel_spectrogram(audio)?;
         let total_frames = mel.shape()[1];
+        println!(
+            "[nemotron-engine] mel shape: [{}, {}], total_frames: {}, chunk_size: {}",
+            mel.shape()[0],
+            mel.shape()[1],
+            total_frames,
+            self.chunk_size
+        );
 
         if total_frames == 0 {
             return Ok(Vec::new());
@@ -753,6 +760,12 @@ impl Nemotron {
             self.encoder_cache = new_cache;
 
             let mut new_tokens = self.decode_chunk_tokens(&encoded, enc_len as usize)?;
+            if chunk_idx < 3 || chunk_idx % 5 == 0 {
+                println!(
+                    "[nemotron-engine] chunk {chunk_idx}: buffer_idx={buffer_idx}/{total_frames}, enc_len={enc_len}, tokens={}",
+                    new_tokens.len()
+                );
+            }
             // Rebase chunk-local frame indices onto the global timeline.
             for token in &mut new_tokens {
                 token.local_frame += encoder_frame_base;
@@ -973,6 +986,20 @@ impl Nemotron {
 
                 let (max_idx, max_val) =
                     crate::tensor_utils::argmax_f32(logits.iter().copied());
+
+                if t == 0 {
+                    println!(
+                        "[nemotron-decode] frame 0: max_idx={max_idx}, max_val={max_val:.2}, blank_id={}, last_token={}",
+                        self.blank_id, self.last_token
+                    );
+                }
+
+                if max_idx != self.blank_id {
+                    println!(
+                        "[nemotron-decode] NON-BLANK EMITTED: token_id={max_idx}, text='{}', val={max_val:.2}",
+                        self.vocab.decode_single(max_idx)
+                    );
+                }
 
                 if max_idx == self.blank_id {
                     break;
