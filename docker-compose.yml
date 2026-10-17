@@ -39,6 +39,7 @@ services:
 
   # CPU service for local execution on machines without NVIDIA GPU
   nemotron-stt-cpu:
+    profiles: ["cpu"]
     build:
       context: .
       dockerfile: Dockerfile.cpu
