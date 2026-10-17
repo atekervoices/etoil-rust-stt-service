@@ -647,13 +647,13 @@ impl Nemotron {
 
     /// Transcribe audio samples (non-streaming)
     pub fn transcribe_audio(&mut self, audio: &[f32]) -> Result<String> {
-        let tokens = self.process_audio(audio)?;
-        let valid: Vec<usize> = tokens
-            .iter()
-            .map(|t| t.id)
-            .filter(|t| *t < self.vocab_size && !self.lang_tag_ids.contains(t))
-            .collect();
-        Ok(self.vocab.decode(&valid))
+        self.reset();
+        let chunk_samples = self.chunk_samples();
+        for chunk in audio.chunks(chunk_samples) {
+            let _ = self.transcribe_chunk(chunk)?;
+        }
+        let _ = self.flush()?;
+        Ok(self.get_transcript())
     }
 
     /// Offline companion to [`Self::transcribe_audio`] returning per-token

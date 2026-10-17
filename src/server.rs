@@ -393,7 +393,12 @@ impl NemotronService {
             model.set_target_lang(language.to_nemotron_lang())?;
         }
 
-        let full_text = model.transcribe_audio(&samples)?;
+        let chunk_samples = model.chunk_samples();
+        for chunk in samples.chunks(chunk_samples) {
+            let _ = model.transcribe_chunk(chunk)?;
+        }
+        let _ = model.flush()?;
+        let full_text = model.get_transcript();
 
         let processing_time = start_time.elapsed().as_secs_f64();
         let real_time_factor = if audio_duration > 0.0 {
@@ -401,6 +406,16 @@ impl NemotronService {
         } else {
             0.0
         };
+
+        println!(
+            "[POST /v1/transcribe] Audio: {:.2}s ({} samples) | Processing: {:.2}s (RTF: {:.3}) | Lang: {} | Result: \"{}\"",
+            audio_duration,
+            samples.len(),
+            processing_time,
+            real_time_factor,
+            language.code(),
+            full_text.trim()
+        );
 
         Ok(TranscriptionResponse {
             text: full_text.trim().to_string(),

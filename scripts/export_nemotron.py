@@ -275,6 +275,10 @@ os.unlink(temp_wav.name)
 prompt_dict = OmegaConf.to_container(
     model.cfg.model_defaults.prompt_dictionary, resolve=True
 )
+# Ensure Luganda prompt mappings are present (prompt slot 63 in phosai/nemotron-3.5-asr-streaming-luganda)
+prompt_dict.setdefault("lug", 63)
+prompt_dict.setdefault("lug-UG", 63)
+prompt_dict.setdefault("lg", 63)
 print(f"\nprompt_dictionary: {len(prompt_dict)} entries")
 
 # ---------------------------------------------------------------------------
@@ -573,7 +577,13 @@ for lang in VERIFY_LANGS:
     idx = prompt_dict[lang]
 
     # NeMo reference path
-    model.set_inference_prompt(lang)
+    try:
+        model.set_inference_prompt(lang)
+    except Exception:
+        if hasattr(model, "_inference_prompt_index"):
+            model._inference_prompt_index = idx
+        elif hasattr(model, "set_inference_prompt_by_index"):
+            model.set_inference_prompt_by_index(idx)
     with torch.no_grad():
         e_raw, e_len, _, _, _ = model.encoder.cache_aware_stream_step(
             processed_signal=processed_signal,
