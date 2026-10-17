@@ -408,12 +408,15 @@ impl NemotronService {
         };
 
         println!(
-            "[POST /v1/transcribe] Audio: {:.2}s ({} samples) | Processing: {:.2}s (RTF: {:.3}) | Lang: {} | Result: \"{}\"",
+            "[POST /v1/transcribe] Audio: {:.2}s ({} samples) | Processing: {:.2}s (RTF: {:.3}) | Lang: {} (Nemotron target: '{}') | Tokens({}): {:?} | Result: \"{}\"",
             audio_duration,
             samples.len(),
             processing_time,
             real_time_factor,
             language.code(),
+            language.to_nemotron_lang(),
+            model.accumulated_tokens().len(),
+            model.accumulated_tokens(),
             full_text.trim()
         );
 

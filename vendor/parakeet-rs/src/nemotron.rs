@@ -615,6 +615,11 @@ impl Nemotron {
         self.vocab.decode(&valid)
     }
 
+    /// Return slice of all emitted token IDs
+    pub fn accumulated_tokens(&self) -> &[usize] {
+        &self.accumulated_tokens
+    }
+
     /// note that, offline transcription for testing/debugging and for some curious ppl :-). with following function too (transcribe_audio)
     pub fn transcribe_file<P: AsRef<Path>>(&mut self, audio_path: P) -> Result<String> {
         let audio = Self::load_mono_file(audio_path)?;
@@ -940,9 +945,21 @@ impl Nemotron {
                 let (max_idx, max_val) =
                     crate::tensor_utils::argmax_f32(logits.iter().copied());
 
+                if t == 0 && self.chunk_idx <= 2 {
+                    println!(
+                        "[Engine Debug] chunk={} t=0: last_token={}, blank_id={}, vocab_size={}, logits_len={}, max_idx={}, max_val={:.3}, text={:?}",
+                        self.chunk_idx, self.last_token, self.blank_id, self.vocab_size, logits.len(), max_idx, max_val, self.vocab.decode_single(max_idx)
+                    );
+                }
+
                 if max_idx == self.blank_id {
                     break;
                 }
+
+                println!(
+                    "[Engine Debug] EMITTED: id={}, text={:?}, max_val={:.3}, frame={}",
+                    max_idx, self.vocab.decode_single(max_idx), max_val, t
+                );
 
                 let logits_slice = logits
                     .as_slice()

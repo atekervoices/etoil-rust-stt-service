@@ -89,7 +89,7 @@
         let processor = null;
         let isRecording = false;
 
-        const CHUNK_SIZE = 2560; // 160ms at 16kHz
+        const CHUNK_SIZE = 8960; // 560ms at 16kHz
 
         function connectWebSocket() {
             const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';

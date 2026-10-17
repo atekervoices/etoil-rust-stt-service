@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-/// Audio streaming constants for Nemotron 3.5 cache-aware ASR
+/// Audio streaming constants for Nemotron 3.5 cache-aware ASR (right-context 6 = 560ms)
 pub const SAMPLE_RATE: usize = 16000;
-pub const CHUNK_DURATION_MS: usize = 160;
-/// 160ms chunks at 16kHz = 2560 audio samples
-pub const CHUNK_SIZE: usize = 2560;
+pub const CHUNK_DURATION_MS: usize = 560;
+/// 560ms chunks at 16kHz = 8960 audio samples
+pub const CHUNK_SIZE: usize = 8960;
 
 /// Languages supported by NVIDIA Nemotron 3.5 Streaming Multilingual ASR
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
