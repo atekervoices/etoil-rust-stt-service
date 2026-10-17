@@ -780,21 +780,26 @@ impl Nemotron {
             }
 
             if let Ok(mel_chunk) = Array3::from_shape_vec((1, N_MELS, expected_size), chunk_data) {
-                if let Ok(mut model) = self.model.lock() {
-                    if let Ok((encoded, enc_len, new_cache)) = model.run_encoder(
-                        &mel_chunk,
-                        expected_size as i64,
-                        &self.encoder_cache,
-                        self.prompt_index,
-                    ) {
-                        self.encoder_cache = new_cache;
-                        drop(model);
-                        if let Ok(mut flush_tokens) = self.decode_chunk_tokens(&encoded, enc_len as usize) {
-                            for token in &mut flush_tokens {
-                                token.local_frame += encoder_frame_base;
-                            }
-                            all_tokens.extend(flush_tokens);
+                let enc_res = {
+                    if let Ok(mut model) = self.model.lock() {
+                        model.run_encoder(
+                            &mel_chunk,
+                            expected_size as i64,
+                            &self.encoder_cache,
+                            self.prompt_index,
+                        ).ok()
+                    } else {
+                        None
+                    }
+                };
+
+                if let Some((encoded, enc_len, new_cache)) = enc_res {
+                    self.encoder_cache = new_cache;
+                    if let Ok(mut flush_tokens) = self.decode_chunk_tokens(&encoded, enc_len as usize) {
+                        for token in &mut flush_tokens {
+                            token.local_frame += encoder_frame_base;
                         }
+                        all_tokens.extend(flush_tokens);
                     }
                 }
             }
