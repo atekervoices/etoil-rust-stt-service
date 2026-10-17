@@ -19,6 +19,7 @@ const N_FFT: usize = 512;
 const WIN_LENGTH: usize = 400;
 const HOP_LENGTH: usize = 160;
 const N_MELS: usize = 128;
+const PREEMPH: f32 = 0.97;
 const LOG_ZERO_GUARD: f32 = 5.960_464_5e-8;
 const LOG_SILENCE_VAL: f32 = -16.635_532; // ln(LOG_ZERO_GUARD), representing silence in log-mel domain
 
