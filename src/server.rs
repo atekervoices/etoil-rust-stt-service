@@ -26,6 +26,7 @@ pub struct TranscriptionQuery {
     pub language: Option<String>,
     pub source_lang: Option<String>,
     pub target_lang: Option<String>,
+    pub blank_penalty: Option<f32>,
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -245,7 +246,7 @@ async fn transcribe_unified_handler(
             // Single file uploaded via multipart
             let single_file = files.into_iter().next().unwrap();
             match service
-                .transcribe_audio_bytes(&single_file.data, language)
+                .transcribe_audio_bytes(&single_file.data, language, query.blank_penalty)
                 .await
             {
                 Ok(resp) => {
@@ -262,7 +263,7 @@ async fn transcribe_unified_handler(
                 files,
                 language: Some(language.code().to_string()),
             };
-            match service.transcribe_batch(batch_request, language).await {
+            match service.transcribe_batch(batch_request, language, query.blank_penalty).await {
                 Ok(resp) => {
                     let reply = warp::reply::json(&TranscribeResponse::Batch(resp));
                     Ok(warp::reply::with_status(reply, warp::http::StatusCode::OK))
@@ -276,7 +277,7 @@ async fn transcribe_unified_handler(
         || content_type.starts_with("audio/")
     {
         // Raw audio bytes (PCM16 or WAV)
-        match service.transcribe_audio_bytes(body.as_ref(), language).await {
+        match service.transcribe_audio_bytes(body.as_ref(), language, query.blank_penalty).await {
             Ok(resp) => {
                 let reply = warp::reply::json(&TranscribeResponse::Single(resp));
                 Ok(warp::reply::with_status(reply, warp::http::StatusCode::OK))
@@ -347,7 +348,7 @@ async fn transcribe_explicit_batch_handler(
         language: Some(language.code().to_string()),
     };
 
-    match service.transcribe_batch(batch_request, language).await {
+    match service.transcribe_batch(batch_request, language, query.blank_penalty).await {
         Ok(response) => {
             let reply = warp::reply::json(&response);
             Ok(warp::reply::with_status(reply, warp::http::StatusCode::OK))
@@ -415,12 +416,17 @@ impl NemotronService {
         &self,
         audio_data: &[u8],
         language: SupportedLanguage,
+        blank_penalty: Option<f32>,
     ) -> Result<TranscriptionResponse, Box<dyn std::error::Error + Send + Sync>> {
         let start_time = Instant::now();
         let samples = parse_audio_samples(audio_data)?;
         let audio_duration = samples.len() as f64 / SAMPLE_RATE as f64;
 
         let mut model = Nemotron::from_shared(&self.handle);
+
+        if let Some(penalty) = blank_penalty {
+            model.set_blank_penalty(penalty);
+        }
 
         if model.mode() == NemotronMode::Multilingual {
             model.set_target_lang(language.to_nemotron_lang())?;
@@ -464,6 +470,7 @@ impl NemotronService {
         &self,
         request: BatchTranscriptionRequest,
         language: SupportedLanguage,
+        blank_penalty: Option<f32>,
     ) -> Result<BatchTranscriptionResponse, Box<dyn std::error::Error + Send + Sync>> {
         let start_time = Instant::now();
         let mut results = Vec::new();
@@ -472,7 +479,7 @@ impl NemotronService {
 
         for file in request.files {
             let file_start = Instant::now();
-            match self.transcribe_audio_bytes(&file.data, language.clone()).await {
+            match self.transcribe_audio_bytes(&file.data, language.clone(), blank_penalty).await {
                 Ok(resp) => {
                     successful_files += 1;
                     results.push(BatchTranscriptionResult {

@@ -331,6 +331,8 @@ pub struct NemotronHandle {
     pre_encode_cache: usize,
     /// Empty for en. populated for multilingual with all `<xx-XX>` token ids.
     lang_tag_ids: Arc<Vec<usize>>,
+    /// Penalty subtracted from blank logit during RNN-T greedy decode (default: 4.0).
+    pub blank_penalty: f32,
 }
 
 /// Nemotron streaming ASR model (0.6B parameters).
@@ -369,6 +371,8 @@ pub struct Nemotron {
     audio_processed: usize,
     chunk_idx: usize,
     accumulated_tokens: Vec<usize>,
+    /// Penalty subtracted from blank logit during RNN-T greedy decode.
+    pub blank_penalty: f32,
 }
 
 impl NemotronHandle {
@@ -407,6 +411,11 @@ impl NemotronHandle {
             Vec::new()
         };
 
+        let blank_penalty = std::env::var("BLANK_PENALTY")
+            .ok()
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(4.0);
+
         Ok(Self {
             model: Arc::new(Mutex::new(model)),
             vocab: Arc::new(vocab),
@@ -423,6 +432,7 @@ impl NemotronHandle {
             chunk_size: cfg.chunk_size_output_frames * SUBSAMPLING_FACTOR,
             pre_encode_cache: cfg.pre_encode_cache,
             lang_tag_ids: Arc::new(lang_tag_ids),
+            blank_penalty,
         })
     }
 
@@ -519,7 +529,18 @@ impl Nemotron {
             audio_processed: 0,
             chunk_idx: 0,
             accumulated_tokens: Vec::new(),
+            blank_penalty: handle.blank_penalty,
         }
+    }
+
+    /// Set blank logit penalty for RNN-T greedy decoding.
+    pub fn set_blank_penalty(&mut self, penalty: f32) {
+        self.blank_penalty = penalty;
+    }
+
+    /// Get current blank logit penalty.
+    pub fn blank_penalty(&self) -> f32 {
+        self.blank_penalty
     }
 
     /// Which variant this instance wraps.
@@ -989,6 +1010,11 @@ impl Nemotron {
                     &self.state_2,
                 )?;
 
+                let mut logits = logits;
+                if self.blank_penalty != 0.0 && self.blank_id < logits.len() {
+                    logits[self.blank_id] -= self.blank_penalty;
+                }
+
                 let (max_idx, max_val) =
                     crate::tensor_utils::argmax_f32(logits.iter().copied());
 
@@ -1004,7 +1030,8 @@ impl Nemotron {
                 if t == 0 || max_idx != self.blank_id || (best_speech_val - blank_val) > -5.0 {
                     let best_speech_text = self.vocab.decode_single(best_speech_idx);
                     println!(
-                        "[nemotron-decode] frame {t}: max_idx={max_idx}, val={max_val:.2} | blank={blank_val:.2} | best_speech={best_speech_idx} '{best_speech_text}' ({best_speech_val:.2}) | margin={:.2}",
+                        "[nemotron-decode] frame {t}: max_idx={max_idx}, val={max_val:.2} | blank={blank_val:.2} (penalty={:.1}) | best_speech={best_speech_idx} '{best_speech_text}' ({best_speech_val:.2}) | margin={:.2}",
+                        self.blank_penalty,
                         best_speech_val - blank_val
                     );
                 }

@@ -19,6 +19,7 @@ pub enum WSMessage {
         language: Option<String>,
         source_lang: Option<String>,
         target_lang: Option<String>,
+        blank_penalty: Option<f32>,
     },
     #[serde(rename = "audio")]
     Audio {
@@ -179,8 +180,12 @@ impl WebSocketHandler {
                                 language,
                                 source_lang,
                                 target_lang,
+                                blank_penalty,
                                 ..
                             } => {
+                                if let Some(penalty) = blank_penalty {
+                                    model.set_blank_penalty(penalty);
+                                }
                                 let lang_str = language
                                     .or(source_lang)
                                     .or(target_lang)
