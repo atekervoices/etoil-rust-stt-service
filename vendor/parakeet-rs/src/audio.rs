@@ -115,7 +115,7 @@ pub fn stft_with_plan(
 
         input.fill(0.0);
         for i in 0..win_length {
-            input[window_offset + i] = padded[start + window_offset + i] * window[i];
+            input[i] = padded[start + window_offset + i] * window[i];
         }
 
         plan.process_with_scratch(&mut input, &mut output, &mut scratch)

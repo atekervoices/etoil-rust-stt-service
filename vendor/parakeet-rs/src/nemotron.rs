@@ -19,8 +19,8 @@ const N_FFT: usize = 512;
 const WIN_LENGTH: usize = 400;
 const HOP_LENGTH: usize = 160;
 const N_MELS: usize = 128;
-const PREEMPH: f32 = 0.97;
 const LOG_ZERO_GUARD: f32 = 5.960_464_5e-8;
+const LOG_SILENCE_VAL: f32 = -16.635_532; // ln(LOG_ZERO_GUARD), representing silence in log-mel domain
 
 // FastConformer subsamples mel frames by 8x, so each encoder output frame spans
 // SUBSAMPLING_FACTOR * HOP_LENGTH audio samples (80ms at 16kHz). Used to convert
@@ -721,7 +721,7 @@ impl Nemotron {
             let main_len = chunk_end - buffer_idx;
 
             let expected_size = self.pre_encode_cache + self.chunk_size;
-            let mut chunk_data = vec![0.0f32; N_MELS * expected_size];
+            let mut chunk_data = vec![LOG_SILENCE_VAL; N_MELS * expected_size];
 
             // Fill pre-encode cache from previous frames
             if chunk_idx > 0 && buffer_idx >= self.pre_encode_cache {
@@ -780,7 +780,7 @@ impl Nemotron {
         // Flush right-context lookahead frames to release trailing tokens
         if chunk_idx > 0 {
             let expected_size = self.pre_encode_cache + self.chunk_size;
-            let mut chunk_data = vec![0.0f32; N_MELS * expected_size];
+            let mut chunk_data = vec![LOG_SILENCE_VAL; N_MELS * expected_size];
             if buffer_idx >= self.pre_encode_cache {
                 let cache_start = buffer_idx - self.pre_encode_cache;
                 for f in 0..self.pre_encode_cache {
@@ -878,7 +878,7 @@ impl Nemotron {
 
         // Build encoder input chunk
         let expected_size = self.pre_encode_cache + self.chunk_size;
-        let mut chunk_data = vec![0.0f32; N_MELS * expected_size];
+        let mut chunk_data = vec![LOG_SILENCE_VAL; N_MELS * expected_size];
 
         // Determine the mel frame range for this chunk
         let is_first_chunk = self.chunk_idx == 0;

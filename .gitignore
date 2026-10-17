@@ -4,3 +4,4 @@ test_audio/
 .env
 .env.*
 !.env.example
+test_model_local.py

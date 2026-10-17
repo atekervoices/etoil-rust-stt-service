@@ -37,20 +37,26 @@ services:
       retries: 3
       start_period: 10s
 
-  # CPU-only alternative (uncomment if running without NVIDIA GPU)
-  # crane-nemotron-stt-cpu:
-  #   build:
-  #     context: .
-  #     dockerfile: Dockerfile.cpu
-  #   container_name: crane-nemotron-stt-service-cpu
-  #   ports:
-  #     - "8099:8099"
-  #   volumes:
-  #     # Model is baked into image. Uncomment only to override with external host weights:
-  #     # - ./crane-nemo-asr-1.1-onnx:/app/crane-nemo-asr-1.1-onnx:ro
-  #     - ./audio:/app/audio:ro
-  #   environment:
-  #     - RUST_LOG=info
-  #     - MODEL_PATH=/app/crane-nemo-asr-1.1-onnx
-  #     - PORT=8099
-  #   restart: unless-stopped
+  # CPU service for local execution on machines without NVIDIA GPU
+  nemotron-stt-cpu:
+    build:
+      context: .
+      dockerfile: Dockerfile.cpu
+      args:
+        - HF_TOKEN=${HF_TOKEN:-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}
+    container_name: nemotron-stt-service-cpu
+    ports:
+      - "8099:8099"
+    volumes:
+      - ./audio:/app/audio:ro
+    environment:
+      - RUST_LOG=info
+      - MODEL_PATH=/app/nemotron-3.5-asr-streaming-luganda-onnx
+      - PORT=8099
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8099/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
