@@ -780,10 +780,10 @@ pub async fn run_server(service: Arc<NemotronService>, port: u16) {
         .with(warp::log("api"));
 
     println!("============================================================");
-    println!(" NVIDIA Nemotron 3.5 Streaming ASR Service running on port {port}");
+    println!(" PHOSAI Nemotron 3.5 Streaming ASR Service running on port {port}");
     println!(" Engine: parakeet-rs | FastConformer Native Transducer");
-    println!(" Languages: Multilingual (en, es, fr, de, it, pt, ru, zh, ja, ko, hi, ar, tr, sw, auto)");
-    println!(" Model: nvidia/nemotron-3.5-asr-streaming-0.6b");
+    println!(" Languages: Multilingual (Luganda [lug], English, Swahili, Spanish, French, auto)");
+    println!(" Model: phosai/nemotron-3.5-asr-streaming-luganda");
     println!("------------------------------------------------------------");
     println!(" [WebSocket Streaming]  ws://localhost:{port}/v1/realtime");
     println!(" [Single Transcribe]    POST http://localhost:{port}/v1/transcribe");

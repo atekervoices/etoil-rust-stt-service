@@ -100,8 +100,8 @@ parser.add_argument(
     help="Attention left context (default: 56 -- the only value this model supports)",
 )
 parser.add_argument(
-    "--right-context", type=int, default=1,
-    help="Attention right context (default: 1 for ~160ms low latency; valid values per model card are 0, 1, 3, 6, 13)",
+    "--right-context", type=int, default=6,
+    help="Attention right context (default: 6 for 560ms streaming; valid values per model card are 0, 1, 3, 6, 13)",
 )
 parser.add_argument(
     "--verify-langs", default="en-US,es-ES,ja-JP",
@@ -275,7 +275,10 @@ os.unlink(temp_wav.name)
 prompt_dict = OmegaConf.to_container(
     model.cfg.model_defaults.prompt_dictionary, resolve=True
 )
-print(f"\nprompt_dictionary: {len(prompt_dict)} entries")
+# Ensure Luganda prompt index 63 is present in the configuration dictionary
+prompt_dict["lug"] = 63
+prompt_dict["lug-UG"] = 63
+print(f"\nprompt_dictionary: {len(prompt_dict)} entries (including Luganda prompt 63)")
 
 # ---------------------------------------------------------------------------
 # Reference inference. I run NeMo's own pipeline (encoder + _apply_prompt_to_encoded)

@@ -91,19 +91,19 @@ const PROMPT_DICTIONARY: &[(&str, i64)] = &[
     ("hu-HU", 23), ("hy-AM", 68), ("id-ID", 34), ("ig-NG", 53), ("it", 15),
     ("it-IT", 15), ("ja-JA", 10), ("ja-JP", 10), ("ka-GE", 67), ("km-KH", 47),
     ("kn-IN", 43), ("ko", 14), ("ko-KO", 14), ("ko-KR", 14), ("ku-TR", 65),
-    ("ky-KG", 71), ("ln-CD", 58), ("lt", 31), ("lt-LT", 31), ("lv", 61),
-    ("lv-LV", 61), ("mi-NZ", 96), ("ml-IN", 44), ("mr-IN", 41), ("ms-MY", 35),
-    ("mt-MT", 102), ("nah-MX", 83), ("nb", 103), ("nb-NO", 103), ("ne-NP", 46),
-    ("nl", 16), ("nl-NL", 16), ("nn", 104), ("nn-NO", 104), ("no", 27),
-    ("no-NO", 27), ("ny-MW", 57), ("or-KE", 59), ("pl", 17), ("pl-PL", 17),
-    ("pt", 13), ("pt-BR", 12), ("pt-PT", 13), ("qu-PE", 80), ("ro", 20),
-    ("ro-RO", 20), ("ru", 11), ("ru-RU", 11), ("rw-RW", 55), ("si-LK", 45),
-    ("sk", 28), ("sk-SK", 28), ("sl", 62), ("sl-SI", 62), ("sm-WS", 98),
-    ("so-SO", 56), ("sv", 24), ("sv-SE", 24), ("sw-KE", 48), ("ta-IN", 39),
-    ("te-IN", 40), ("tg-TJ", 70), ("th-TH", 32), ("to-TO", 99), ("tr", 18),
-    ("tr-TR", 18), ("uk", 19), ("uk-UA", 19), ("ur-PK", 37), ("uz-UZ", 69),
-    ("vi-VN", 33), ("yo-NG", 52), ("zh-CN", 4), ("zh-TW", 5), ("zh-ZH", 4),
-    ("zu-ZA", 51),
+    ("ky-KG", 71), ("ln-CD", 58), ("lt", 31), ("lt-LT", 31), ("lug", 63),
+    ("lug-UG", 63), ("lv", 61), ("lv-LV", 61), ("mi-NZ", 96), ("ml-IN", 44),
+    ("mr-IN", 41), ("ms-MY", 35), ("mt-MT", 102), ("nah-MX", 83), ("nb", 103),
+    ("nb-NO", 103), ("ne-NP", 46), ("nl", 16), ("nl-NL", 16), ("nn", 104),
+    ("nn-NO", 104), ("no", 27), ("no-NO", 27), ("ny-MW", 57), ("or-KE", 59),
+    ("pl", 17), ("pl-PL", 17), ("pt", 13), ("pt-BR", 12), ("pt-PT", 13),
+    ("qu-PE", 80), ("ro", 20), ("ro-RO", 20), ("ru", 11), ("ru-RU", 11),
+    ("rw-RW", 55), ("si-LK", 45), ("sk", 28), ("sk-SK", 28), ("sl", 62),
+    ("sl-SI", 62), ("sm-WS", 98), ("so-SO", 56), ("sv", 24), ("sv-SE", 24),
+    ("sw-KE", 48), ("ta-IN", 39), ("te-IN", 40), ("tg-TJ", 70), ("th-TH", 32),
+    ("to-TO", 99), ("tr", 18), ("tr-TR", 18), ("uk", 19), ("uk-UA", 19),
+    ("ur-PK", 37), ("uz-UZ", 69), ("vi-VN", 33), ("yo-NG", 52), ("zh-CN", 4),
+    ("zh-TW", 5), ("zh-ZH", 4), ("zu-ZA", 51),
 ];
 
 /// Detect SentencePiece pieces that encode a language tag like `<en-US>` or
@@ -116,12 +116,18 @@ fn is_lang_tag(piece: &str) -> bool {
     }
     let inner = &bytes[1..bytes.len() - 1];
     match inner.len() {
-        2 => inner[0].is_ascii_lowercase() && inner[1].is_ascii_lowercase(),
+        2 | 3 => inner.iter().all(|b| b.is_ascii_lowercase()),
         5 => inner[0].is_ascii_lowercase()
             && inner[1].is_ascii_lowercase()
             && inner[2] == b'-'
             && inner[3].is_ascii_uppercase()
             && inner[4].is_ascii_uppercase(),
+        6 => inner[0].is_ascii_lowercase()
+            && inner[1].is_ascii_lowercase()
+            && inner[2].is_ascii_lowercase()
+            && inner[3] == b'-'
+            && inner[4].is_ascii_uppercase()
+            && inner[5].is_ascii_uppercase(),
         _ => false,
     }
 }

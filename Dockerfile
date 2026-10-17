@@ -38,15 +38,19 @@ RUN pip install --no-cache-dir \
     huggingface_hub \
     "nemo_toolkit[asr]"
 
+# Accept HF token for private model download
+ARG HF_TOKEN
+ENV HF_TOKEN=${HF_TOKEN}
+
 # Copy export helper scripts
 COPY scripts/download_model.py /export/download_model.py
 COPY scripts/export_nemotron.py /export/export_nemotron.py
 
-# Download original NVIDIA Nemotron model (.nemo) from Hugging Face
+# Download phosai Luganda Nemotron model (.nemo) from Hugging Face
 RUN python3 /export/download_model.py --output-dir /export/models
 
-# Export original NVIDIA .nemo to parakeet-rs ONNX format with 160ms streaming (right-context=1)
-RUN python3 /export/export_nemotron.py /export/models/nemotron-3.5-asr-streaming-0.6b.nemo /export/nemotron-3.5-asr-streaming-0.6b-onnx --right-context 1
+# Export to parakeet-rs ONNX format with 560ms streaming (right-context=6, matching trained lookahead)
+RUN python3 /export/export_nemotron.py /export/models/nemotron-asr-streaming-luganda.nemo /export/nemotron-3.5-asr-streaming-luganda-onnx --right-context 6
 
 # Clean up raw .nemo checkpoint to minimize disk usage
 RUN rm -rf /export/models
@@ -115,14 +119,14 @@ RUN ldconfig || true && \
     find /usr -name "*libcublasLt.so*" 2>/dev/null || true
 
 # 2. Copy the exported ONNX model files from stage 1
-COPY --from=model-exporter /export/nemotron-3.5-asr-streaming-0.6b-onnx /app/nemotron-3.5-asr-streaming-0.6b-onnx
+COPY --from=model-exporter /export/nemotron-3.5-asr-streaming-luganda-onnx /app/nemotron-3.5-asr-streaming-luganda-onnx
 
 # Expose HTTP / WebSocket API port
 EXPOSE 8099
 
 # Environment variables
 ENV RUST_LOG=info
-ENV MODEL_PATH=/app/nemotron-3.5-asr-streaming-0.6b-onnx
+ENV MODEL_PATH=/app/nemotron-3.5-asr-streaming-luganda-onnx
 ENV PORT=8099
 
 # Health check
