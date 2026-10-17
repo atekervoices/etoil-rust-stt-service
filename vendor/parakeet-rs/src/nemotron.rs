@@ -414,7 +414,7 @@ impl NemotronHandle {
         let blank_penalty = std::env::var("BLANK_PENALTY")
             .ok()
             .and_then(|v| v.parse::<f32>().ok())
-            .unwrap_or(4.0);
+            .unwrap_or(0.0);
 
         Ok(Self {
             model: Arc::new(Mutex::new(model)),
@@ -1011,7 +1011,10 @@ impl Nemotron {
                 )?;
 
                 let mut logits = logits;
-                if self.blank_penalty != 0.0 && self.blank_id < logits.len() {
+                // Only apply blank penalty during speech frames (logits > -50.0).
+                // In silence/padding frames where logits are saturated negative numbers (e.g. -300 to -600),
+                // penalizing blank drops it below random vocabulary noise floor, causing hallucination loops.
+                if self.blank_penalty != 0.0 && self.blank_id < logits.len() && logits[self.blank_id] > -50.0 {
                     logits[self.blank_id] -= self.blank_penalty;
                 }
 

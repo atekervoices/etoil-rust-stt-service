@@ -17,7 +17,7 @@ services:
       - RUST_LOG=info
       - MODEL_PATH=/app/nemotron-3.5-asr-streaming-luganda-onnx
       - PORT=8099
-      - BLANK_PENALTY=${BLANK_PENALTY:-4.0}
+      - BLANK_PENALTY=${BLANK_PENALTY:-0.0}
       - HF_TOKEN=${HF_TOKEN:-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}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility

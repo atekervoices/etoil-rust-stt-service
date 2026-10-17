@@ -139,6 +139,9 @@
         }
 
         langSelect.addEventListener('change', () => {
+            confirmedText.textContent = '';
+            partialText.textContent = '';
+            placeholder.style.display = 'inline';
             sendConfig();
         });
 

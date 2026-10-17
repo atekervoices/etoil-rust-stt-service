@@ -213,6 +213,14 @@ impl WebSocketHandler {
                                                     .await;
                                             }
                                         }
+
+                                        // Reset model state and audio/transcript buffers for the new language
+                                        audio_buffer.clear();
+                                        accumulated_transcript.clear();
+                                        last_emitted_text.clear();
+                                        last_emitted_final.clear();
+                                        silent_chunks_count = 0;
+                                        model.reset();
                                     }
                                     Err(err) => {
                                         let _ = tx.send(WSMessage::Error { message: err }).await;
@@ -330,7 +338,9 @@ impl WebSocketHandler {
                                 audio_buffer.clear();
                                 accumulated_transcript.clear();
                                 last_emitted_text.clear();
+                                last_emitted_final.clear();
                                 silent_chunks_count = 0;
+                                model.reset();
                             }
 
                             _ => {}
@@ -390,15 +400,6 @@ impl WebSocketHandler {
                                             silent_chunks_count += 1;
                                             // After ~800ms (5 chunks of 160ms) of pause after speech, finalize sentence
                                             if silent_chunks_count >= 5 {
-                                                // Flush trailing lookahead tokens
-                                                let flush_chunk = vec![0.0f32; CHUNK_SIZE];
-                                                let delta_res: Result<String, _> = model.transcribe_chunk(&flush_chunk);
-                                                if let Ok(flush_delta) = delta_res {
-                                                    if !flush_delta.is_empty() {
-                                                        accumulated_transcript.push_str(&flush_delta);
-                                                    }
-                                                }
-
                                                 let final_sentence = accumulated_transcript.trim().to_string();
                                                 if !final_sentence.is_empty() {
                                                     println!("[Sentence | {}] {}", active_language.code(), final_sentence);
@@ -422,6 +423,7 @@ impl WebSocketHandler {
 
                                                 accumulated_transcript.clear();
                                                 last_emitted_text.clear();
+                                                last_emitted_final.clear();
                                                 silent_chunks_count = 0;
                                                 model.reset();
                                             }
