@@ -562,6 +562,10 @@ impl Nemotron {
                 ))
             })?;
         self.prompt_index = Some(idx);
+        println!(
+            "[nemotron-engine] set_target_lang: lang='{lang}' -> prompt_index={:?}",
+            self.prompt_index
+        );
         Ok(())
     }
 
@@ -988,10 +992,20 @@ impl Nemotron {
                 let (max_idx, max_val) =
                     crate::tensor_utils::argmax_f32(logits.iter().copied());
 
-                if t == 0 {
+                let blank_val = if self.blank_id < logits.len() { logits[self.blank_id] } else { 0.0 };
+                let (best_speech_idx, best_speech_val) = logits
+                    .iter()
+                    .enumerate()
+                    .filter(|(i, _)| *i != self.blank_id)
+                    .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+                    .map(|(i, v)| (i, *v))
+                    .unwrap_or((0, 0.0));
+
+                if t == 0 || max_idx != self.blank_id || (best_speech_val - blank_val) > -5.0 {
+                    let best_speech_text = self.vocab.decode_single(best_speech_idx);
                     println!(
-                        "[nemotron-decode] frame 0: max_idx={max_idx}, max_val={max_val:.2}, blank_id={}, last_token={}",
-                        self.blank_id, self.last_token
+                        "[nemotron-decode] frame {t}: max_idx={max_idx}, val={max_val:.2} | blank={blank_val:.2} | best_speech={best_speech_idx} '{best_speech_text}' ({best_speech_val:.2}) | margin={:.2}",
+                        best_speech_val - blank_val
                     );
                 }
 
