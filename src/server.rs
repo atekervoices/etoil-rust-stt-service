@@ -129,17 +129,42 @@ fn parse_audio_samples(data: &[u8]) -> Result<Vec<f32>, String> {
                 hound::SampleFormat::Float => {
                     reader.samples::<f32>().map(|s| s.unwrap_or(0.0)).collect()
                 }
-                hound::SampleFormat::Int => reader
-                    .samples::<i16>()
-                    .map(|s| s.unwrap_or(0) as f32 / 32768.0)
-                    .collect(),
+                hound::SampleFormat::Int => {
+                    let bits = spec.bits_per_sample;
+                    if bits <= 16 {
+                        reader
+                            .samples::<i16>()
+                            .map(|s| s.unwrap_or(0) as f32 / (1 << (bits - 1)) as f32)
+                            .collect()
+                    } else {
+                        reader
+                            .samples::<i32>()
+                            .map(|s| s.unwrap_or(0) as f32 / (1 << (bits - 1)) as f32)
+                            .collect()
+                    }
+                }
             };
             if spec.channels > 1 {
-                samples = samples.chunks(spec.channels as usize).map(|c| c[0]).collect();
+                let ch = spec.channels as usize;
+                samples = samples
+                    .chunks(ch)
+                    .map(|c| c.iter().sum::<f32>() / c.len() as f32)
+                    .collect();
             }
             if spec.sample_rate != 16000 {
                 samples = resample_to_16k(&samples, spec.sample_rate);
             }
+            let max_amp = samples.iter().copied().fold(0.0f32, |m, s| m.max(s.abs()));
+            let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len().max(1) as f32).sqrt();
+            println!(
+                "[parse_audio] WAV parsed: {:.2}s, {} channels, {} Hz -> 16kHz mono ({} samples, max_amp: {:.4}, rms: {:.4})",
+                samples.len() as f32 / 16000.0,
+                spec.channels,
+                spec.sample_rate,
+                samples.len(),
+                max_amp,
+                rms
+            );
             return Ok(samples);
         }
     }
@@ -150,6 +175,15 @@ fn parse_audio_samples(data: &[u8]) -> Result<Vec<f32>, String> {
         let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0;
         samples.push(sample);
     }
+    let max_amp = samples.iter().copied().fold(0.0f32, |m, s| m.max(s.abs()));
+    let rms = (samples.iter().map(|s| s * s).sum::<f32>() / samples.len().max(1) as f32).sqrt();
+    println!(
+        "[parse_audio] Raw PCM16 parsed: {:.2}s ({} samples, max_amp: {:.4}, rms: {:.4})",
+        samples.len() as f32 / 16000.0,
+        samples.len(),
+        max_amp,
+        rms
+    );
     Ok(samples)
 }
 
@@ -392,34 +426,13 @@ impl NemotronService {
             model.set_target_lang(language.to_nemotron_lang())?;
         }
 
-        let mut full_text = String::new();
-
-        // Process in 160ms chunks (2560 samples)
-        for chunk in samples.chunks(CHUNK_SIZE) {
-            let chunk_data: Vec<f32> = if chunk.len() < CHUNK_SIZE {
-                let mut padded = chunk.to_vec();
-                padded.resize(CHUNK_SIZE, 0.0);
-                padded
-            } else {
-                chunk.to_vec()
-            };
-
-            let delta = model.transcribe_chunk(&chunk_data)?;
-            if !delta.is_empty() {
-                full_text.push_str(&delta);
+        let full_text = match model.transcribe_audio(&samples) {
+            Ok(text) => text,
+            Err(e) => {
+                println!("[POST /v1/transcribe] transcribe_audio error: {e}");
+                model.get_transcript()
             }
-        }
-
-        // Flush 3 chunks to release lookahead tokens from RNNT joint network
-        let flush_chunk = vec![0.0f32; CHUNK_SIZE];
-        for _ in 0..3 {
-            let delta_res: Result<String, _> = model.transcribe_chunk(&flush_chunk);
-            if let Ok(flush_delta) = delta_res {
-                if !flush_delta.is_empty() {
-                    full_text.push_str(&flush_delta);
-                }
-            }
-        }
+        };
 
         let processing_time = start_time.elapsed().as_secs_f64();
         let real_time_factor = if audio_duration > 0.0 {
@@ -428,8 +441,18 @@ impl NemotronService {
             0.0
         };
 
+        let clean_text = full_text.trim().to_string();
+        println!(
+            "[POST /v1/transcribe] Audio: {:.2}s ({} samples) | Lang: {} (target: '{}') | Output: \"{}\"",
+            audio_duration,
+            samples.len(),
+            language.code(),
+            language.to_nemotron_lang(),
+            clean_text
+        );
+
         Ok(TranscriptionResponse {
-            text: full_text.trim().to_string(),
+            text: clean_text,
             processing_time,
             audio_duration,
             real_time_factor,
