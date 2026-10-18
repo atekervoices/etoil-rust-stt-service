@@ -275,7 +275,11 @@ os.unlink(temp_wav.name)
 prompt_dict = OmegaConf.to_container(
     model.cfg.model_defaults.prompt_dictionary, resolve=True
 )
-print(f"\nprompt_dictionary: {len(prompt_dict)} entries")
+if "lug" not in prompt_dict:
+    prompt_dict["lug"] = 63
+if "lug-UG" not in prompt_dict:
+    prompt_dict["lug-UG"] = 63
+print(f"\nprompt_dictionary: {len(prompt_dict)} entries (including Luganda slot 63)")
 
 # ---------------------------------------------------------------------------
 # Reference inference. I run NeMo's own pipeline (encoder + _apply_prompt_to_encoded)
