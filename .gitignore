@@ -13,3 +13,4 @@ audio/
 *.pt
 *.onnx
 *.nemo
+.env
