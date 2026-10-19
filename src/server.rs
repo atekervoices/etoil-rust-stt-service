@@ -1,13 +1,11 @@
 use bytes::Bytes;
 use multer::Multipart;
-use parakeet_rs::{Nemotron, NemotronHandle, NemotronMode};
+use crate::model_torch::NemotronTorchModel;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::sync::Mutex;
 use warp::{ws::Ws, Filter};
-
-use crate::language::{CHUNK_DURATION_MS, CHUNK_SIZE, SAMPLE_RATE, SupportedLanguage};
+use crate::language::{SAMPLE_RATE, SupportedLanguage};
 use crate::websocket::WebSocketHandler;
 
 #[derive(Debug, Serialize, Deserialize, utoipa::ToSchema)]
@@ -358,56 +356,20 @@ async fn transcribe_explicit_batch_handler(
     }
 }
 
-pub fn create_execution_config() -> Result<parakeet_rs::ExecutionConfig, Box<dyn std::error::Error + Send + Sync>> {
-    let env = parakeet_rs::ort::init()
-        .with_name("nemotron-stt")
-        .build()?;
-
-    #[cfg(feature = "cuda")]
-    {
-        println!("Execution backend: Requesting CUDA GPU Acceleration (ExecutionProvider::Cuda)");
-        let config = parakeet_rs::ExecutionConfig::new()
-            .with_environment(env)
-            .with_execution_provider(parakeet_rs::ExecutionProvider::Cuda);
-        Ok(config)
-    }
-    #[cfg(not(feature = "cuda"))]
-    {
-        println!("Execution backend: CPU (ExecutionProvider::Cpu)");
-        let config = parakeet_rs::ExecutionConfig::new()
-            .with_environment(env)
-            .with_execution_provider(parakeet_rs::ExecutionProvider::Cpu);
-        Ok(config)
-    }
-}
-
 pub struct NemotronService {
     pub model_path: Arc<String>,
-    pub handle: Arc<NemotronHandle>,
+    pub model: Arc<NemotronTorchModel>,
 }
 
 impl NemotronService {
     pub async fn new(model_path: &str) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
-        println!("Loading NVIDIA Nemotron model from: {model_path}");
-
-        let exec_config = create_execution_config()?;
-        let handle = NemotronHandle::from_pretrained(model_path, Some(exec_config))?;
-        println!(
-            "NVIDIA Nemotron model loaded successfully! Mode: {:?}",
-            handle.mode()
-        );
-
-        // Pre-warm model to compile CUDA kernels and claim GPU memory
-        println!("Pre-warming model to allocate GPU memory pools and compile kernels...");
-        let mut warmup_model = Nemotron::from_shared(&handle);
-        let dummy_chunk = vec![0.0f32; CHUNK_SIZE];
-        let _ = warmup_model.transcribe_chunk(&dummy_chunk);
-        drop(warmup_model);
-        println!("Warmup complete - ready for streaming!");
+        println!("Loading NVIDIA Nemotron TorchScript model from: {model_path}");
+        let model = NemotronTorchModel::load(model_path)?;
+        println!("Nemotron TorchScript model loaded successfully!");
 
         Ok(Self {
             model_path: Arc::new(model_path.to_string()),
-            handle: Arc::new(handle),
+            model: Arc::new(model),
         })
     }
 
@@ -420,17 +382,12 @@ impl NemotronService {
         let samples = parse_audio_samples(audio_data)?;
         let audio_duration = samples.len() as f64 / SAMPLE_RATE as f64;
 
-        let mut model = Nemotron::from_shared(&self.handle);
-
-        if model.mode() == NemotronMode::Multilingual {
-            model.set_target_lang(language.to_nemotron_lang())?;
-        }
-
-        let full_text = match model.transcribe_audio(&samples) {
+        let target_lang = language.to_nemotron_lang();
+        let full_text = match self.model.transcribe(&samples, 16000, target_lang) {
             Ok(text) => text,
             Err(e) => {
-                println!("[POST /v1/transcribe] transcribe_audio error: {e}");
-                model.get_transcript()
+                println!("[POST /v1/transcribe] transcribe error: {e}");
+                String::new()
             }
         };
 
@@ -447,7 +404,7 @@ impl NemotronService {
             audio_duration,
             samples.len(),
             language.code(),
-            language.to_nemotron_lang(),
+            target_lang,
             clean_text
         );
 

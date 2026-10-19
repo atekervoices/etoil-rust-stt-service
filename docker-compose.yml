@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
       args:
-        - HF_TOKEN=${HF_TOKEN:-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}
+        - HF_TOKEN=${HF_TOKEN}
     container_name: nemotron-stt-service
     ports:
       - "8099:8099"
@@ -17,7 +17,7 @@ services:
       - RUST_LOG=info
       - MODEL_PATH=/app/nemotron-3.5-asr-streaming-luganda-onnx
       - PORT=8099
-      - HF_TOKEN=${HF_TOKEN:-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}
+      - HF_TOKEN=${HF_TOKEN}
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - LD_LIBRARY_PATH=/app:/usr/local/nvidia/lib64:/usr/local/nvidia/lib:/usr/local/cuda/lib64:/usr/local/cuda-13.0/lib64:/usr/lib/x86_64-linux-gnu:/usr/local/lib
@@ -44,7 +44,7 @@ services:
       context: .
       dockerfile: Dockerfile.cpu
       args:
-        - HF_TOKEN=${HF_TOKEN:-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}
+        - HF_TOKEN=${HF_TOKEN}
     container_name: nemotron-stt-service-cpu
     ports:
       - "8099:8099"
@@ -52,7 +52,7 @@ services:
       - ./audio:/app/audio:ro
     environment:
       - RUST_LOG=info
-      - MODEL_PATH=/app/nemotron-3.5-asr-streaming-luganda-onnx
+      - MODEL_PATH=/app/torchscript_model
       - PORT=8099
     restart: unless-stopped
     healthcheck:

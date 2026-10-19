@@ -1,3 +1,15 @@
 /target
 test_audio/
 *.log
+
+# Large binary models and caches
+scratch/
+torchscript_model/
+output_torchscript/
+nemotron-3.5-asr-streaming-luganda-onnx/
+.hf_cache/
+audio/
+*.wav
+*.pt
+*.onnx
+*.nemo

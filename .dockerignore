@@ -1,6 +1,5 @@
 # Rust build artifacts
 target/
-Cargo.lock
 
 # Git
 .git/
@@ -46,3 +45,10 @@ Thumbs.db
 # Temporary files
 tmp/
 temp/
+
+# Model weights
+nemotron-3.5-asr-streaming-luganda-onnx/
+*.onnx
+*.onnx.data
+*.nemo
+audio/

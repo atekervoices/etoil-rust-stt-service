@@ -1,21 +1,16 @@
 use std::sync::Arc;
-
-mod language;
-mod server;
-mod websocket;
-
-use server::{run_server, NemotronService};
+use etoil_rust_stt_service::server::{run_server, NemotronService};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     println!("============================================================");
-    println!(" NVIDIA Nemotron 3.5 Cache-Aware Streaming ASR Service");
-    println!(" Official Multilingual Streaming FastConformer RNN-Transducer");
-    println!(" Model: nvidia/nemotron-3.5-asr-streaming-0.6b (via parakeet-rs)");
+    println!(" NVIDIA Nemotron 3.5 TorchScript ASR Service (tch-rs)");
+    println!(" High-performance native C++/Rust multi-threaded inference");
+    println!(" Model: TorchScript FastConformer RNN-Transducer");
     println!("============================================================");
 
     let model_path = std::env::var("MODEL_PATH")
-        .unwrap_or_else(|_| "nemotron-3.5-asr-streaming-0.6b-onnx".to_string());
+        .unwrap_or_else(|_| "torchscript_model".to_string());
 
     let port: u16 = std::env::var("PORT")
         .ok()

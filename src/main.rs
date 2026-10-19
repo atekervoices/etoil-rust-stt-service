@@ -1,65 +1,36 @@
-use parakeet_rs::{Nemotron, NemotronMode};
 use std::env;
 use std::path::Path;
 use std::time::Instant;
 
-mod language;
+use etoil_rust_stt_service::model_torch::NemotronTorchModel;
 
-use language::{CHUNK_SIZE, SAMPLE_RATE, SupportedLanguage};
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
-        println!("Usage: {} <audio.wav> [language: en|es|fr|de|auto] [model_dir]", args[0]);
-        println!("Example: {} sample.wav en ./nemotron-3.5-asr-streaming-0.6b-onnx", args[0]);
-        println!();
-        println!("Supported languages: Multilingual (en, es, fr, de, it, pt, ru, zh, ja, ko, hi, ar, tr, sw, auto)");
+        println!("Usage: {} <audio.wav> [language: lug|en|sw|auto] [model_dir]", args[0]);
+        println!("Example: {} sample.wav lug ./torchscript_model", args[0]);
         return Ok(());
     }
 
     let audio_path = &args[1];
-    let lang_input = args.get(2).map(|s| s.as_str()).unwrap_or("auto");
-    let model_dir = args
-        .get(3)
-        .map(|s| s.as_str())
-        .unwrap_or("nemotron-3.5-asr-streaming-0.6b-onnx");
-
-    let language = match SupportedLanguage::parse(lang_input) {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("Error: {e}");
-            std::process::exit(1);
-        }
-    };
+    let lang_input = args.get(2).map(|s| s.as_str()).unwrap_or("lug");
+    let model_dir = args.get(3).map(|s| s.as_str()).unwrap_or("torchscript_model");
 
     println!("============================================================");
-    println!(" NVIDIA Nemotron 3.5 Cache-Aware File Transcription");
+    println!(" NVIDIA Nemotron 3.5 High-Speed Torch-RS Transcription");
     println!(" Audio file: {audio_path}");
-    println!(" Target language: {} ({})", language.name(), language.code());
-    println!(" Model directory: {model_dir}");
-    println!(" Chunk size: 160ms (2560 samples @ 16kHz)");
+    println!(" Language:   {lang_input}");
+    println!(" Model dir:  {model_dir}");
     println!("============================================================");
 
     if !Path::new(model_dir).exists() {
-        eprintln!(
-            "Model directory '{model_dir}' not found. Please ensure the ONNX model files are in place."
-        );
+        eprintln!("Warning: Model directory '{model_dir}' not found locally.");
     }
 
-    println!("Loading Nemotron model from '{model_dir}'...");
     let load_start = Instant::now();
-    let mut model = Nemotron::from_pretrained(model_dir, None)?;
-    println!("Model loaded in {:.2}s (Mode: {:?})", load_start.elapsed().as_secs_f64(), model.mode());
-
-    if model.mode() == NemotronMode::Multilingual {
-        println!(
-            "Setting target language to '{}' (Nemotron prompt: '{}')...",
-            language.name(),
-            language.to_nemotron_lang()
-        );
-        model.set_target_lang(language.to_nemotron_lang())?;
-    }
+    let model = NemotronTorchModel::load(model_dir)?;
+    println!("Model loaded in {:.2}s", load_start.elapsed().as_secs_f64());
 
     // Read WAV audio
     let mut reader = hound::WavReader::open(audio_path)?;
@@ -84,49 +55,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let audio_duration = samples.len() as f64 / spec.sample_rate as f64;
     println!("Total audio duration: {:.2}s ({} samples)", audio_duration, samples.len());
-    println!("\n--- Streaming Transcription Output ---");
 
     let transcribe_start = Instant::now();
-    let mut full_transcript = String::new();
-
-    // Stream through cache-aware 160ms chunks
-    for (chunk_idx, chunk) in samples.chunks(CHUNK_SIZE).enumerate() {
-        let chunk_data: Vec<f32> = if chunk.len() < CHUNK_SIZE {
-            let mut padded = chunk.to_vec();
-            padded.resize(CHUNK_SIZE, 0.0);
-            padded
-        } else {
-            chunk.to_vec()
-        };
-
-        let text = model.transcribe_chunk(&chunk_data)?;
-        if !text.is_empty() {
-            print!("{text}");
-            std::io::Write::flush(&mut std::io::stdout())?;
-            full_transcript.push_str(&text);
-        }
-    }
-
-    // Flush lookahead
-    let flush_chunk = vec![0.0f32; CHUNK_SIZE];
-    for _ in 0..3 {
-        if let Ok(text) = model.transcribe_chunk(&flush_chunk) {
-            if !text.is_empty() {
-                print!("{text}");
-                std::io::Write::flush(&mut std::io::stdout())?;
-                full_transcript.push_str(&text);
-            }
-        }
-    }
-
-    model.reset();
-    println!("\n--------------------------------------");
-
+    let transcript = model.transcribe(&samples, spec.sample_rate, lang_input)?;
     let elapsed = transcribe_start.elapsed().as_secs_f64();
     let rtf = if audio_duration > 0.0 { elapsed / audio_duration } else { 0.0 };
 
     println!("\n=== Transcription Complete ===");
-    println!("Final Text: {}", full_transcript.trim());
+    println!("Final Text: {}", transcript.trim());
     println!("Processing Time: {:.3}s", elapsed);
     println!("Audio Duration:  {:.3}s", audio_duration);
     println!("Real-Time Factor (RTF): {:.4}x (lower is faster)", rtf);

@@ -1,13 +1,11 @@
 use base64::Engine;
 use futures_util::{SinkExt, StreamExt};
-use parakeet_rs::{Nemotron, NemotronMode};
 use serde::{Deserialize, Serialize};
-use std::collections::VecDeque;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use warp::ws::{Message as WarpMessage, WebSocket};
 
-use crate::language::{CHUNK_SIZE, SupportedLanguage};
+use crate::language::SupportedLanguage;
 use crate::server::NemotronService;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -88,50 +86,36 @@ impl WebSocketHandler {
         let (mut ws_tx, mut ws_rx) = ws.split();
         let (tx, mut rx) = mpsc::channel::<WSMessage>(100);
 
-        let mut active_language = SupportedLanguage::Auto;
+        let mut active_language = SupportedLanguage::Luganda;
         if let Some(ref l) = initial_language {
             if let Ok(parsed) = SupportedLanguage::parse(l) {
                 active_language = parsed;
             }
         }
 
-        // Send ready message on connection
+        // Send ready handshake on connection
         let ready_msg = WSMessage::Ready {
-            model: "phosai-streaming-voice-v1".to_string(),
+            model: "nvidia-nemotron-3.5-torch".to_string(),
             supported_languages: vec![
+                "lug (Luganda)".to_string(),
                 "en (English US)".to_string(),
-                "en-gb (English Commonwealth)".to_string(),
+                "sw (Swahili)".to_string(),
                 "es (Spanish)".to_string(),
                 "fr (French)".to_string(),
                 "de (German)".to_string(),
-                "it (Italian)".to_string(),
-                "pt (Portuguese)".to_string(),
-                "ru (Russian)".to_string(),
-                "zh (Chinese)".to_string(),
-                "ja (Japanese)".to_string(),
-                "ko (Korean)".to_string(),
-                "hi (Hindi)".to_string(),
-                "ar (Arabic)".to_string(),
-                "tr (Turkish)".to_string(),
-                "sw (Swahili)".to_string(),
                 "auto (Auto-detect)".to_string(),
             ],
         };
-        if ws_tx
-            .send(WarpMessage::text(
-                serde_json::to_string(&ready_msg).unwrap_or_default(),
-            ))
-            .await
-            .is_err()
-        {
-            return;
+        if let Ok(ready_text) = serde_json::to_string(&ready_msg) {
+            let _ = ws_tx.send(WarpMessage::text(ready_text)).await;
         }
 
-        // Handle outgoing messages
+        // Dedicated outgoing WebSocket transmitter task
         tokio::spawn(async move {
             while let Some(msg) = rx.recv().await {
                 if let Ok(text) = serde_json::to_string(&msg) {
-                    if ws_tx.send(WarpMessage::text(text)).await.is_err() {
+                    if let Err(e) = ws_tx.send(WarpMessage::text(text)).await {
+                        eprintln!("[WebSocket Out] Error sending frame: {e}");
                         break;
                     }
                 }
@@ -139,21 +123,17 @@ impl WebSocketHandler {
         });
 
         // Connection state
-        let mut audio_buffer: VecDeque<f32> = VecDeque::with_capacity(CHUNK_SIZE * 4);
-        let mut accumulated_transcript = String::new();
+        let mut audio_buffer: Vec<f32> = Vec::with_capacity(16000 * 30);
         let mut last_emitted_text = String::new();
         let mut last_emitted_final = String::new();
-        let mut silent_chunks_count: usize = 0;
+        let mut last_inference_time = std::time::Instant::now();
         let start_time = std::time::Instant::now();
-
-        // Initialize independent client-isolated Nemotron stream from shared GPU handle
-        let mut model = Nemotron::from_shared(&self.service.handle);
-        if model.mode() == NemotronMode::Multilingual {
-            let _ = model.set_target_lang(active_language.to_nemotron_lang());
-        }
+        let mut sample_rate: u32 = 16000;
+        let mut silent_chunks: usize = 0;
+        let mut speech_detected: bool = false;
 
         while let Some(msg) = ws_rx.next().await {
-            let mut new_audio_received = false;
+            let mut new_audio_samples: Vec<f32> = Vec::new();
             match msg {
                 Ok(message) => {
                     if message.is_text() {
@@ -179,35 +159,24 @@ impl WebSocketHandler {
                                 language,
                                 source_lang,
                                 target_lang,
-                                ..
+                                sample_rate: sr,
                             } => {
+                                if let Some(s) = sr {
+                                    sample_rate = s;
+                                }
                                 let lang_str = language
                                     .or(source_lang)
                                     .or(target_lang)
-                                    .unwrap_or_else(|| "auto".to_string());
+                                    .unwrap_or_else(|| "lug".to_string());
 
                                 match SupportedLanguage::parse(&lang_str) {
                                     Ok(lang) => {
                                         active_language = lang;
                                         println!(
-                                            "WebSocket: Configured language '{}' (Nemotron target: '{}')",
+                                            "WebSocket: Configured language '{}' (target: '{}')",
                                             active_language.name(),
                                             active_language.to_nemotron_lang()
                                         );
-
-                                        if model.mode() == NemotronMode::Multilingual {
-                                            if let Err(e) = model.set_target_lang(
-                                                active_language.to_nemotron_lang(),
-                                            ) {
-                                                let _ = tx
-                                                    .send(WSMessage::Error {
-                                                        message: format!(
-                                                            "Failed to set model language: {e}"
-                                                        ),
-                                                    })
-                                                    .await;
-                                            }
-                                        }
                                     }
                                     Err(err) => {
                                         let _ = tx.send(WSMessage::Error { message: err }).await;
@@ -215,221 +184,175 @@ impl WebSocketHandler {
                                 }
                             }
 
-                            WSMessage::Audio { data, .. } => {
-                                // Decode base64 PCM16 audio
-                                let audio_bytes = match base64::engine::general_purpose::STANDARD
-                                    .decode(&data)
-                                {
-                                    Ok(b) => b,
-                                    Err(e) => {
-                                        let _ = tx
-                                            .send(WSMessage::Error {
-                                                message: format!("Base64 audio decode error: {e}"),
-                                            })
-                                            .await;
-                                        continue;
-                                    }
-                                };
-
-                                // Convert 16-bit PCM LE to f32 samples
-                                for chunk in audio_bytes.chunks_exact(2) {
-                                    let sample =
-                                        i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0;
-                                    audio_buffer.push_back(sample);
+                            WSMessage::Audio { data, sample_rate: sr } => {
+                                if let Some(s) = sr {
+                                    sample_rate = s;
                                 }
-                                new_audio_received = true;
+                                if let Ok(audio_bytes) = base64::engine::general_purpose::STANDARD.decode(&data) {
+                                    for chunk in audio_bytes.chunks_exact(2) {
+                                        let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0;
+                                        new_audio_samples.push(sample);
+                                    }
+                                }
                             }
 
                             WSMessage::Reset { finalize } => {
                                 let should_finalize = finalize.unwrap_or(true);
-                                if !should_finalize {
-                                    // Soft reset (Modal pattern): return current text without clearing state
-                                    let current_clean = accumulated_transcript.trim().to_string();
+                                if should_finalize && !last_emitted_text.is_empty() {
                                     let _ = tx
                                         .send(WSMessage::Transcript {
-                                            text: current_clean,
-                                            is_final: true,
-                                            finalize: Some(false),
-                                        })
-                                        .await;
-                                } else {
-                                    // Hard reset: clear all buffers and reset model cache
-                                    audio_buffer.clear();
-                                    accumulated_transcript.clear();
-                                    last_emitted_text.clear();
-                                    last_emitted_final.clear();
-                                    silent_chunks_count = 0;
-                                    model.reset();
-                                    println!("WebSocket: Model cache reset by client request");
-                                }
-                            }
-
-                            WSMessage::End | WSMessage::Flush => {
-                                // Process any remaining audio in the buffer
-                                if !audio_buffer.is_empty() {
-                                    let mut final_chunk: Vec<f32> = audio_buffer.drain(..).collect();
-                                    final_chunk.resize(CHUNK_SIZE, 0.0);
-                                    let delta_res: Result<String, _> = model.transcribe_chunk(&final_chunk);
-                                    if let Ok(delta) = delta_res {
-                                        accumulated_transcript.push_str(&delta);
-                                    }
-                                }
-                                // Flush trailing lookahead tokens (right-context flush)
-                                let flush_chunk = vec![0.0f32; CHUNK_SIZE];
-                                for _ in 0..2 {
-                                    let delta_res: Result<String, _> = model.transcribe_chunk(&flush_chunk);
-                                    if let Ok(delta) = delta_res {
-                                        accumulated_transcript.push_str(&delta);
-                                    }
-                                }
-                                model.reset();
-
-                                let final_text = accumulated_transcript.trim().to_string();
-                                if !final_text.is_empty() {
-                                    // Server-side deduplication (Modal pattern):
-                                    // Only emit the delta if final_text starts with last_emitted_final
-                                    let delta_text = if !last_emitted_final.is_empty()
-                                        && final_text.starts_with(&last_emitted_final)
-                                    {
-                                        final_text[last_emitted_final.len()..].trim().to_string()
-                                    } else {
-                                        final_text.clone()
-                                    };
-
-                                    let text_to_emit = if delta_text.is_empty() {
-                                        final_text.clone()
-                                    } else {
-                                        delta_text
-                                    };
-
-                                    last_emitted_final = final_text.clone();
-                                    println!("[Final  | {}] {}", active_language.code(), text_to_emit);
-
-                                    let _ = tx
-                                        .send(WSMessage::Transcript {
-                                            text: text_to_emit.clone(),
+                                            text: last_emitted_text.clone(),
                                             is_final: true,
                                             finalize: Some(true),
                                         })
                                         .await;
-
-                                    let _ = tx
-                                        .send(WSMessage::Final {
-                                            text: text_to_emit,
-                                            confidence: 0.95,
-                                            timestamp: start_time.elapsed().as_secs_f64(),
-                                            processing_time: start_time.elapsed().as_secs_f64(),
-                                        })
-                                        .await;
                                 }
                                 audio_buffer.clear();
-                                accumulated_transcript.clear();
                                 last_emitted_text.clear();
-                                silent_chunks_count = 0;
-                                model.reset();
+                                last_emitted_final.clear();
+                                speech_detected = false;
+                                silent_chunks = 0;
+                                println!("WebSocket: Session reset by client request");
+                            }
+
+                            WSMessage::End | WSMessage::Flush => {
+                                if !audio_buffer.is_empty() {
+                                    let model = self.service.model.clone();
+                                    let buf_clone = audio_buffer.clone();
+                                    let lang_target = active_language.to_nemotron_lang().to_string();
+                                    let sr = sample_rate;
+
+                                    let transcript_res = tokio::task::spawn_blocking(move || {
+                                        model.transcribe(&buf_clone, sr, &lang_target)
+                                    }).await;
+
+                                    if let Ok(Ok(transcript)) = transcript_res {
+                                        let final_text = transcript.trim().to_string();
+                                        if !final_text.is_empty() {
+                                            let delta_text = if !last_emitted_final.is_empty() && final_text.starts_with(&last_emitted_final) {
+                                                final_text[last_emitted_final.len()..].trim().to_string()
+                                            } else {
+                                                final_text.clone()
+                                            };
+                                            let text_to_emit = if delta_text.is_empty() { final_text.clone() } else { delta_text };
+                                            last_emitted_final = final_text.clone();
+                                            println!("[Final  | {}] {}", active_language.code(), text_to_emit);
+
+                                            let _ = tx.send(WSMessage::Transcript {
+                                                text: text_to_emit.clone(),
+                                                is_final: true,
+                                                finalize: Some(true),
+                                            }).await;
+
+                                            let _ = tx.send(WSMessage::Final {
+                                                text: text_to_emit,
+                                                confidence: 0.95,
+                                                timestamp: start_time.elapsed().as_secs_f64(),
+                                                processing_time: start_time.elapsed().as_secs_f64(),
+                                            }).await;
+                                        }
+                                    }
+                                }
+                                audio_buffer.clear();
+                                last_emitted_text.clear();
+                                speech_detected = false;
+                                silent_chunks = 0;
                             }
 
                             _ => {}
                         }
                     } else if message.is_binary() {
-                        // Support direct raw PCM 16-bit little-endian binary streaming
                         let audio_bytes = message.as_bytes();
                         for chunk in audio_bytes.chunks_exact(2) {
-                            let sample =
-                                i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0;
-                            audio_buffer.push_back(sample);
+                            let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0;
+                            new_audio_samples.push(sample);
                         }
-                        new_audio_received = true;
                     } else if message.is_close() {
                         break;
                     }
 
-                    // Unified audio chunk processing
-                    if new_audio_received {
-                        while audio_buffer.len() >= CHUNK_SIZE {
-                            let chunk: Vec<f32> = audio_buffer.drain(..CHUNK_SIZE).collect();
+                    // Process new incoming audio samples
+                    if !new_audio_samples.is_empty() {
+                        let rms = (new_audio_samples.iter().map(|&s| s * s).sum::<f32>() / new_audio_samples.len().max(1) as f32).sqrt();
+                        audio_buffer.extend(&new_audio_samples);
 
-                            // Continuous stateful Nemotron streaming (native blank transducer)
-                            let delta_res: Result<String, _> = model.transcribe_chunk(&chunk);
+                        // Sensitive threshold (0.002) so quiet laptop mics are detected reliably
+                        if rms >= 0.002 {
+                            speech_detected = true;
+                            silent_chunks = 0;
+                        } else if speech_detected {
+                            silent_chunks += 1;
+                        }
 
-                            match delta_res {
-                                Ok(delta) => {
-                                    if !delta.is_empty() {
-                                        silent_chunks_count = 0;
-                                        accumulated_transcript.push_str(&delta);
+                        // Sentence pause detection: ~1.2s (12 chunks) of silence after speech -> finalize sentence
+                        if speech_detected && silent_chunks >= 12 && audio_buffer.len() >= 16000 {
+                            let model = self.service.model.clone();
+                            let buf_clone = audio_buffer.clone();
+                            let lang_target = active_language.to_nemotron_lang().to_string();
+                            let sr = sample_rate;
 
-                                        let current_clean = accumulated_transcript.trim().to_string();
-                                        if !current_clean.is_empty() && current_clean != last_emitted_text {
-                                            last_emitted_text = current_clean.clone();
-                                            println!("[Stream | {}] {}", active_language.code(), current_clean);
+                            let transcript_res = tokio::task::spawn_blocking(move || {
+                                model.transcribe(&buf_clone, sr, &lang_target)
+                            }).await;
 
-                                            let _ = tx
-                                                .send(WSMessage::Transcript {
-                                                    text: current_clean.clone(),
-                                                    is_final: false,
-                                                    finalize: None,
-                                                })
-                                                .await;
-
-                                            let _ = tx
-                                                .send(WSMessage::Partial {
-                                                    text: delta,
-                                                    accumulated_text: current_clean,
-                                                    confidence: 0.95,
-                                                    timestamp: start_time.elapsed().as_secs_f64(),
-                                                })
-                                                .await;
-                                        }
-                                    } else {
-                                        // Silence chunk: check for sentence boundary pause
-                                        if !accumulated_transcript.is_empty() {
-                                            silent_chunks_count += 1;
-                                            // After ~800ms (5 chunks of 160ms) of pause after speech, finalize sentence
-                                            if silent_chunks_count >= 5 {
-                                                // Flush trailing lookahead tokens
-                                                let flush_chunk = vec![0.0f32; CHUNK_SIZE];
-                                                let delta_res: Result<String, _> = model.transcribe_chunk(&flush_chunk);
-                                                if let Ok(flush_delta) = delta_res {
-                                                    if !flush_delta.is_empty() {
-                                                        accumulated_transcript.push_str(&flush_delta);
-                                                    }
-                                                }
-
-                                                let final_sentence = accumulated_transcript.trim().to_string();
-                                                if !final_sentence.is_empty() {
-                                                    println!("[Sentence | {}] {}", active_language.code(), final_sentence);
-                                                    let _ = tx
-                                                        .send(WSMessage::Transcript {
-                                                            text: final_sentence.clone(),
-                                                            is_final: true,
-                                                            finalize: Some(true),
-                                                        })
-                                                        .await;
-
-                                                    let _ = tx
-                                                        .send(WSMessage::Final {
-                                                            text: final_sentence,
-                                                            confidence: 0.95,
-                                                            timestamp: start_time.elapsed().as_secs_f64(),
-                                                            processing_time: start_time.elapsed().as_secs_f64(),
-                                                        })
-                                                        .await;
-                                                }
-
-                                                accumulated_transcript.clear();
-                                                last_emitted_text.clear();
-                                                silent_chunks_count = 0;
-                                                model.reset();
-                                            }
-                                        }
-                                    }
+                            if let Ok(Ok(transcript)) = transcript_res {
+                                let final_text = transcript.trim().to_string();
+                                if !final_text.is_empty() {
+                                    println!("[Sentence | {}] {}", active_language.code(), final_text);
+                                    let _ = tx.send(WSMessage::Transcript {
+                                        text: final_text.clone(),
+                                        is_final: true,
+                                        finalize: Some(true),
+                                    }).await;
+                                    let _ = tx.send(WSMessage::Final {
+                                        text: final_text,
+                                        confidence: 0.95,
+                                        timestamp: start_time.elapsed().as_secs_f64(),
+                                        processing_time: start_time.elapsed().as_secs_f64(),
+                                    }).await;
                                 }
-                                Err(e) => {
-                                    let _ = tx
-                                        .send(WSMessage::Error {
-                                            message: format!("Nemotron inference error: {e}"),
-                                        })
-                                        .await;
+                            }
+                            audio_buffer.clear();
+                            last_emitted_text.clear();
+                            speech_detected = false;
+                            silent_chunks = 0;
+                            last_inference_time = std::time::Instant::now();
+                        }
+                        // Periodic partial transcription update every ~600ms while speech is ongoing
+                        else if speech_detected && audio_buffer.len() >= 6000 && last_inference_time.elapsed().as_millis() >= 600 {
+                            last_inference_time = std::time::Instant::now();
+                            let model = self.service.model.clone();
+                            let buf_clone = audio_buffer.clone();
+                            let lang_target = active_language.to_nemotron_lang().to_string();
+                            let sr = sample_rate;
+
+                            let transcript_res = tokio::task::spawn_blocking(move || {
+                                model.transcribe(&buf_clone, sr, &lang_target)
+                            }).await;
+
+                            if let Ok(Ok(transcript)) = transcript_res {
+                                let current_clean = transcript.trim().to_string();
+                                if !current_clean.is_empty() && current_clean != last_emitted_text {
+                                    let delta = if current_clean.starts_with(&last_emitted_text) {
+                                        current_clean[last_emitted_text.len()..].trim().to_string()
+                                    } else {
+                                        current_clean.clone()
+                                    };
+                                    last_emitted_text = current_clean.clone();
+                                    println!("[Stream | {}] {}", active_language.code(), current_clean);
+
+                                    let _ = tx.send(WSMessage::Transcript {
+                                        text: current_clean.clone(),
+                                        is_final: false,
+                                        finalize: None,
+                                    }).await;
+
+                                    let _ = tx.send(WSMessage::Partial {
+                                        text: delta,
+                                        accumulated_text: current_clean,
+                                        confidence: 0.95,
+                                        timestamp: start_time.elapsed().as_secs_f64(),
+                                    }).await;
                                 }
                             }
                         }
@@ -438,8 +361,5 @@ impl WebSocketHandler {
                 Err(_) => break,
             }
         }
-
-        // Cleanup model cache when client disconnects
-        model.reset();
     }
 }

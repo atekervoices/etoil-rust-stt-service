@@ -689,6 +689,11 @@ impl Nemotron {
         // each token's chunk-local frame so `local_frame` becomes a global index.
         let mut encoder_frame_base = 0usize;
 
+        println!(
+            "[nemotron offline] mel frames: {}, chunk_size: {}, pre_encode_cache: {}, prompt_index: {:?}",
+            total_frames, self.chunk_size, self.pre_encode_cache, self.prompt_index
+        );
+
         while buffer_idx < total_frames {
             let chunk_end = (buffer_idx + self.chunk_size).min(total_frames);
             let main_len = chunk_end - buffer_idx;
@@ -743,6 +748,12 @@ impl Nemotron {
             buffer_idx += self.chunk_size;
             chunk_idx += 1;
         }
+
+        println!(
+            "[nemotron offline] Completed {} chunks. Emitted {} tokens total.",
+            chunk_idx,
+            all_tokens.len()
+        );
 
         Ok(all_tokens)
     }
@@ -895,6 +906,11 @@ impl Nemotron {
             Error::Model(format!("Failed to acquire model lock: {e}"))
         })?;
 
+        let blank_penalty: f32 = std::env::var("BLANK_PENALTY")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(3.0);
+
         for t in 0..enc_frames {
             let frame = encoder_out.slice(s![0, .., t]).to_owned();
             let frame = frame
@@ -910,24 +926,37 @@ impl Nemotron {
                     &self.state_2,
                 )?;
 
-                let (max_idx, max_val) =
-                    crate::tensor_utils::argmax_f32(logits.iter().copied());
+                let mut best_nb_idx = 0;
+                let mut best_nb_val = f32::NEG_INFINITY;
+                for (i, &val) in logits.iter().enumerate() {
+                    if i != self.blank_id && val > best_nb_val {
+                        best_nb_val = val;
+                        best_nb_idx = i;
+                    }
+                }
 
-                if max_idx == self.blank_id {
+                let blank_val = logits[self.blank_id] - blank_penalty;
+
+                if blank_val >= best_nb_val {
                     break;
                 }
 
                 let logits_slice = logits
                     .as_slice()
                     .ok_or_else(|| Error::Model("non-contiguous logits".into()))?;
-                let logprob = log_softmax_at(logits_slice, max_idx, max_val);
+                let logprob = log_softmax_at(logits_slice, best_nb_idx, best_nb_val);
+                let text = self.vocab.decode_single(best_nb_idx);
+                println!(
+                    "[nemotron emit] t={}: token {} ('{}'), logprob: {:.2}, margin: {:.2}",
+                    t, best_nb_idx, text, logprob, best_nb_val - blank_val
+                );
                 tokens.push(TokenInfo {
-                    id: max_idx,
-                    text: self.vocab.decode_single(max_idx),
+                    id: best_nb_idx,
+                    text,
                     logprob,
                     local_frame: t,
                 });
-                self.last_token = max_idx as i32;
+                self.last_token = best_nb_idx as i32;
                 self.state_1 = new_state_1;
                 self.state_2 = new_state_2;
             }

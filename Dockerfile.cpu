@@ -1,117 +1,76 @@
 # ==============================================================================
-# Multi-stage Dockerfile for Crane Nemotron Streaming STT Service (CPU-only)
-# Completely Self-Contained: Automatically downloads, exports model & compiles Rust
+# Multi-stage Dockerfile for Crane Nemotron Streaming STT Service (Torch-RS / CPU)
+# Completely Self-Contained: Compiles Rust with LibTorch C++ and serves TorchScript
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
-# Stage 1: Model Downloader & ONNX Exporter
+# Stage 1: Rust Service Builder with LibTorch C++
 # ------------------------------------------------------------------------------
-FROM python:3.11-slim AS model-exporter
+FROM rust:1.85-slim AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV PYTHONUNBUFFERED=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
-    curl \
-    build-essential \
-    libsndfile1 \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /export
-
-# Upgrade pip and install wheel/setuptools build tools
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel
-
-# Install lightweight CPU PyTorch using --extra-index-url (allows PyPI dependencies like flit_core to resolve)
-RUN pip install --no-cache-dir torch torchaudio --extra-index-url https://download.pytorch.org/whl/cpu
-
-# Install export requirements and NeMo toolkit
-RUN pip install --no-cache-dir \
-    "numpy<2.0" \
-    "pyarrow<18.0.0" \
-    onnx \
-    onnxruntime \
-    soundfile \
-    sentencepiece \
-    huggingface_hub \
-    "nemo_toolkit[asr]"
-
-# Accept HF token for model download
-ARG HF_TOKEN
-ENV HF_TOKEN=${HF_TOKEN}
-
-# Copy export helper scripts
-COPY scripts/download_model.py /export/download_model.py
-COPY scripts/export_nemotron.py /export/export_nemotron.py
-
-# Download Nemotron Luganda model (.nemo) from Hugging Face
-RUN python3 /export/download_model.py --output-dir /export/models
-
-# Export .nemo to parakeet-rs ONNX format with 160ms streaming (right-context=1)
-RUN python3 /export/export_nemotron.py /export/models/nemotron-asr-streaming-luganda.nemo /export/nemotron-3.5-asr-streaming-luganda-onnx --right-context 1
-
-# Clean up raw .nemo checkpoint to minimize any layer disk usage
-RUN rm -rf /export/models
-
-# ------------------------------------------------------------------------------
-# Stage 2: Rust Service Builder (CPU)
-# ------------------------------------------------------------------------------
-FROM ubuntu:24.04 AS builder
-
-ENV DEBIAN_FRONTEND=noninteractive
-
-RUN apt-get update && apt-get install -y \
     curl \
     pkg-config \
     libssl-dev \
     libasound2-dev \
     g++ \
-    git \
+    unzip \
     ca-certificates \
-    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
     && rm -rf /var/lib/apt/lists/*
 
-ENV PATH="/root/.cargo/bin:${PATH}"
+# Copy pre-downloaded official LibTorch C++ CPU (v2.4.0)
+COPY scratch/libtorch /usr/local/libtorch
+
+ENV LIBTORCH=/usr/local/libtorch
+ENV LD_LIBRARY_PATH=/usr/local/libtorch/lib:${LD_LIBRARY_PATH}
 
 WORKDIR /app
 
-# Copy source code and static web assets
-COPY . .
+# Copy Rust crate sources
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY static ./static
 
-# Build the release binary with CPU defaults
+# Build release binary
 RUN cargo build --release --bin api_server
 
 # ------------------------------------------------------------------------------
-# Stage 3: Minimal Production Runtime (CPU only)
+# Stage 2: Minimal Production Runtime
 # ------------------------------------------------------------------------------
-FROM ubuntu:24.04
+FROM debian:12-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
+ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/local/libtorch/lib:${LD_LIBRARY_PATH}
 
-# Install runtime dependencies (no Python or build toolchains in final image!)
-RUN apt-get update && apt-get install -y \
+# Install minimal runtime shared libraries (no Python, no build toolchains)
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    libssl3t64 \
-    libasound2t64 \
+    libssl3 \
+    libasound2 \
+    libgomp1 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# 1. Copy compiled Rust binary
+# 1. Copy LibTorch runtime shared libraries
+COPY --from=builder /usr/local/libtorch/lib/ /usr/local/libtorch/lib/
+RUN ldconfig /usr/local/libtorch/lib
+
+# 2. Copy compiled Rust service binary
 COPY --from=builder /app/target/release/api_server /app/api_server
 
-# 2. Copy the exported ONNX model files from stage 1
-COPY --from=model-exporter /export/nemotron-3.5-asr-streaming-luganda-onnx /app/nemotron-3.5-asr-streaming-luganda-onnx
+# 3. Copy TorchScript model weights and tokenizer directly
+COPY torchscript_model /app/torchscript_model
 
 # Expose HTTP / WebSocket API port
 EXPOSE 8099
 
 # Environment variables
 ENV RUST_LOG=info
-ENV MODEL_PATH=/app/nemotron-3.5-asr-streaming-luganda-onnx
+ENV MODEL_PATH=/app/torchscript_model
 ENV PORT=8099
 
 # Health check
