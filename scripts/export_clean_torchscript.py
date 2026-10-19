@@ -5,10 +5,16 @@ import torch.nn as nn
 import soundfile as sf
 from transformers import AutoProcessor, AutoModelForRNNT
 
-hf_token = os.environ.get("HF_TOKEN")
+raw_token = os.environ.get("HF_TOKEN", "").strip()
+hf_token = raw_token if raw_token else None
 model_id = "phosai/nemotron-3.5-asr-streaming-luganda"
 output_dir = os.environ.get("OUTPUT_DIR", "/export/torchscript_model")
 os.makedirs(output_dir, exist_ok=True)
+
+if hf_token is None:
+    print("Notice: HF_TOKEN is not set. Accessing Hugging Face without auth token...")
+else:
+    print(f"Using provided HF_TOKEN (length: {len(hf_token)})...")
 
 print(f"Loading model & processor from {model_id}...")
 processor = AutoProcessor.from_pretrained(model_id, token=hf_token)
