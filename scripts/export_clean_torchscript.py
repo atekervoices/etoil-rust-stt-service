@@ -144,8 +144,14 @@ class JointWrapper(nn.Module):
 
 # Trace and Export
 audio_path = "/export/audio/audio_1.16k.wav"
-audio, sr = sf.read(audio_path)
-raw_waveform = torch.from_numpy(audio).float().unsqueeze(0)
+if os.path.exists(audio_path):
+    print(f"Reading sample audio from {audio_path} for tracing...")
+    audio, sr = sf.read(audio_path)
+    raw_waveform = torch.from_numpy(audio).float().unsqueeze(0)
+else:
+    print("Using synthetic 16kHz audio waveform (1.0s) for tracing...")
+    raw_waveform = torch.randn(1, 16000, dtype=torch.float32)
+
 prompts = torch.tensor([63], dtype=torch.long)
 
 with torch.inference_mode():
