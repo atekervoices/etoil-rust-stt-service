@@ -48,7 +48,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-ARG LIBTORCH_URL="https://download.pytorch.org/whl/cpu/libtorch-cxx11-abi-shared-with-deps-2.4.0%2Bcpu.zip"
+ARG LIBTORCH_URL="https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.4.0%2Bcpu.zip"
 
 RUN mkdir -p /usr/local/libtorch && \
     echo "Downloading LibTorch from ${LIBTORCH_URL}..." && \
