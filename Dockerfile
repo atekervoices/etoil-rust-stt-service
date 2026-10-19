@@ -1,10 +1,10 @@
 # ==============================================================================
-# Multi-stage Dockerfile for NVIDIA Nemotron 3.5 Streaming STT Service (GPU/CUDA)
-# Completely Self-Contained: Downloads original .nemo, exports to ONNX & compiles Rust
+# Multi-stage Dockerfile for NVIDIA Nemotron 3.5 Streaming STT Service (TorchScript)
+# Self-Contained: Exports TorchScript model, builds Rust tch-rs binary, runs service
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
-# Stage 1: Model Downloader & ONNX Exporter
+# Stage 1: Model Exporter (Exports HF model to TorchScript if not already present)
 # ------------------------------------------------------------------------------
 FROM python:3.11-slim AS model-exporter
 
@@ -12,126 +12,104 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git \
     curl \
-    build-essential \
-    libsndfile1 \
     ca-certificates \
+    libsndfile1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /export
 
-# Upgrade pip and install wheel/setuptools build tools
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
-
-# Install lightweight CPU PyTorch using --extra-index-url
 RUN pip install --no-cache-dir torch torchaudio --extra-index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir transformers soundfile huggingface_hub
 
-# Install export requirements and NeMo toolkit
-RUN pip install --no-cache-dir \
-    "numpy<2.0" \
-    "pyarrow<18.0.0" \
-    onnx \
-    onnxruntime \
-    soundfile \
-    sentencepiece \
-    huggingface_hub \
-    "nemo_toolkit[asr]"
-
-# Accept HF token for model download
-ARG HF_TOKEN
+ARG HF_TOKEN=""
 ENV HF_TOKEN=${HF_TOKEN}
 
-# Copy export helper scripts
-COPY scripts/download_model.py /export/download_model.py
-COPY scripts/export_nemotron.py /export/export_nemotron.py
+COPY scripts/export_clean_torchscript.py /export/export_clean_torchscript.py
+COPY torchscript_model* /export/prebaked_model/
 
-# Download Nemotron Luganda model (.nemo) from Hugging Face
-RUN python3 /export/download_model.py --output-dir /export/models
-
-# Export .nemo to parakeet-rs ONNX format with 560ms streaming (right-context=6)
-RUN python3 /export/export_nemotron.py /export/models/nemotron-asr-streaming-luganda.nemo /export/nemotron-3.5-asr-streaming-luganda-onnx --right-context 6
-
-# Clean up raw .nemo checkpoint to minimize disk usage
-RUN rm -rf /export/models
+RUN if [ -f "/export/prebaked_model/encoder.pt" ]; then \
+        echo "Using prebaked torchscript_model..." && \
+        cp -r /export/prebaked_model /export/torchscript_model; \
+    else \
+        echo "Exporting torchscript_model from Hugging Face..." && \
+        OUTPUT_DIR=/export/torchscript_model python3 /export/export_clean_torchscript.py; \
+    fi
 
 # ------------------------------------------------------------------------------
-# Stage 2: Rust Service Builder
+# Stage 2: Rust Service Builder (tch-rs with LibTorch C++)
 # ------------------------------------------------------------------------------
-FROM ubuntu:24.04 AS builder
+FROM rust:1.85-slim AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     pkg-config \
     libssl-dev \
     libasound2-dev \
     g++ \
-    git \
+    unzip \
     ca-certificates \
-    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
     && rm -rf /var/lib/apt/lists/*
 
-ENV PATH="/root/.cargo/bin:${PATH}"
+ARG LIBTORCH_URL="https://download.pytorch.org/whl/cpu/libtorch-cxx11-abi-shared-with-deps-2.4.0%2Bcpu.zip"
+
+RUN mkdir -p /usr/local/libtorch && \
+    echo "Downloading LibTorch from ${LIBTORCH_URL}..." && \
+    curl -fsSL -o /tmp/libtorch.zip "${LIBTORCH_URL}" && \
+    unzip -q /tmp/libtorch.zip -d /tmp && \
+    mv /tmp/libtorch/* /usr/local/libtorch/ && \
+    rm -rf /tmp/libtorch.zip /tmp/libtorch
+
+ENV LIBTORCH=/usr/local/libtorch
+ENV LD_LIBRARY_PATH=/usr/local/libtorch/lib:${LD_LIBRARY_PATH}
 
 WORKDIR /app
 
-# Copy source code and static web assets
-COPY . .
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY static ./static
 
-# Build the release binary with CUDA acceleration
-RUN cargo build --release --features cuda --bin api_server
-
-# Collect any dynamic shared libraries (.so) produced by ort into /app/dist_libs
-RUN mkdir -p /app/dist_libs && \
-    touch /app/dist_libs/.keep && \
-    find /app/target /root /tmp -name "*onnxruntime*.so*" -exec cp -v -L {} /app/dist_libs/ \; 2>/dev/null || true && \
-    ls -la /app/dist_libs/
+# Build the release binary
+RUN cargo build --release --bin api_server
 
 # ------------------------------------------------------------------------------
-# Stage 3: Minimal Production Runtime (GPU / CUDA 13.0 + cuDNN)
+# Stage 3: Minimal Production Runtime
 # ------------------------------------------------------------------------------
-FROM nvidia/cuda:13.0.0-cudnn-runtime-ubuntu24.04
+FROM debian:12-slim
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV NVIDIA_VISIBLE_DEVICES=all
-ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
-ENV LD_LIBRARY_PATH=/app:/usr/local/nvidia/lib64:/usr/local/nvidia/lib:/usr/local/cuda/lib64:/usr/local/cuda-13.0/lib64:/usr/lib/x86_64-linux-gnu:/usr/local/lib:${LD_LIBRARY_PATH}
+ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/local/libtorch/lib:${LD_LIBRARY_PATH}
 
-# Remove CUDA forward-compatibility shims (causes Error 803 on consumer GeForce RTX GPUs)
-# and install runtime dependencies
-RUN rm -rf /usr/local/cuda/compat /etc/ld.so.conf.d/*cuda-compat*.conf && \
-    apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
-    libssl3t64 \
-    libasound2t64 \
+    libssl3 \
+    libasound2 \
+    libgomp1 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# 1. Copy compiled Rust binary and ONNX Runtime shared libraries directly into /app and system library path
+# 1. Copy LibTorch runtime libraries
+COPY --from=builder /usr/local/libtorch/lib/ /usr/local/libtorch/lib/
+RUN ldconfig /usr/local/libtorch/lib
+
+# 2. Copy compiled Rust API server
 COPY --from=builder /app/target/release/api_server /app/api_server
-COPY --from=builder /app/dist_libs/ /app/
-COPY --from=builder /app/dist_libs/ /usr/local/lib/
-RUN ldconfig || true && \
-    find /usr -name "*libcublasLt.so*" 2>/dev/null || true
 
-# 2. Copy the exported ONNX model files from stage 1
-COPY --from=model-exporter /export/nemotron-3.5-asr-streaming-luganda-onnx /app/nemotron-3.5-asr-streaming-luganda-onnx
+# 3. Copy TorchScript model
+COPY --from=model-exporter /export/torchscript_model /app/torchscript_model
 
-# Expose HTTP / WebSocket API port
 EXPOSE 8099
 
-# Environment variables
 ENV RUST_LOG=info
-ENV MODEL_PATH=/app/nemotron-3.5-asr-streaming-luganda-onnx
+ENV MODEL_PATH=/app/torchscript_model
 ENV PORT=8099
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8099/health || exit 1
 
-# Launch the STT API server
 CMD ["/app/api_server"]
