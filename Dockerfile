@@ -21,7 +21,7 @@ WORKDIR /export
 
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 RUN pip install --no-cache-dir torch torchaudio --extra-index-url https://download.pytorch.org/whl/cpu
-RUN pip install --no-cache-dir transformers soundfile huggingface_hub
+RUN pip install --no-cache-dir transformers soundfile huggingface_hub librosa scipy
 
 ARG HF_TOKEN=""
 ENV HF_TOKEN=${HF_TOKEN}
