@@ -27,15 +27,9 @@ ARG HF_TOKEN=""
 ENV HF_TOKEN=${HF_TOKEN}
 
 COPY scripts/export_clean_torchscript.py /export/export_clean_torchscript.py
-COPY torchscript_model* /export/prebaked_model/
 
-RUN if [ -f "/export/prebaked_model/encoder.pt" ]; then \
-        echo "Using prebaked torchscript_model..." && \
-        cp -r /export/prebaked_model /export/torchscript_model; \
-    else \
-        echo "Exporting torchscript_model from Hugging Face..." && \
-        OUTPUT_DIR=/export/torchscript_model python3 /export/export_clean_torchscript.py; \
-    fi
+RUN echo "Exporting TorchScript model from Hugging Face..." && \
+    OUTPUT_DIR=/export/torchscript_model python3 /export/export_clean_torchscript.py
 
 # ------------------------------------------------------------------------------
 # Stage 2: Rust Service Builder (tch-rs with LibTorch C++)

@@ -9,7 +9,8 @@ services:
     ports:
       - "8099:8099"
     volumes:
-      - ./torchscript_model:/app/torchscript_model:ro
+      # Optional: Uncomment only if you wish to override baked-in model with host weights:
+      # - ./torchscript_model:/app/torchscript_model:ro
       - ./audio:/app/audio:ro
     environment:
       - RUST_LOG=info
