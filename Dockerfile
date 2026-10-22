@@ -40,6 +40,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
+    wget \
     pkg-config \
     libssl-dev \
     libasound2-dev \
@@ -52,7 +53,11 @@ ARG LIBTORCH_URL="https://download.pytorch.org/libtorch/cu124/libtorch-cxx11-abi
 
 RUN mkdir -p /usr/local/libtorch && \
     echo "Downloading LibTorch from ${LIBTORCH_URL}..." && \
-    curl -fsSL -o /tmp/libtorch.zip "${LIBTORCH_URL}" && \
+    for i in 1 2 3 4 5 6 7 8 9 10; do \
+        echo "Download attempt $i/10..." && \
+        wget -c --progress=dot:giga -O /tmp/libtorch.zip "${LIBTORCH_URL}" && break || sleep 3; \
+    done && \
+    test -s /tmp/libtorch.zip && \
     unzip -q /tmp/libtorch.zip -d /tmp && \
     mv /tmp/libtorch/* /usr/local/libtorch/ && \
     rm -rf /tmp/libtorch.zip /tmp/libtorch
