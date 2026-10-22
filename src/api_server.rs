@@ -4,7 +4,9 @@ use etoil_rust_stt_service::server::{run_server, NemotronService};
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Suppress verbose C++ LibTorch cuDNN warnings (e.g. RNN contiguous weights warning)
-    std::env::set_var("TORCH_CPP_LOG_LEVEL", "ERROR");
+    unsafe {
+        std::env::set_var("TORCH_CPP_LOG_LEVEL", "ERROR");
+    }
 
     println!("============================================================");
     println!(" NVIDIA Nemotron 3.5 TorchScript ASR Service (tch-rs)");
