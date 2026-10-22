@@ -74,7 +74,8 @@ class EndToEndEncoderWrapper(nn.Module):
         audio_length = waveform.shape[1]
         feature_length = audio_length // self.hop_length
         T_frames = input_features.shape[1]
-        mask = torch.arange(T_frames, device=waveform.device)[None, :] < feature_length
+        frame_idx = torch.cumsum(input_features.new_ones(1, T_frames, dtype=torch.long), dim=-1) - 1
+        mask = frame_idx < feature_length
         input_features = input_features * mask.unsqueeze(-1)
         return input_features
 
@@ -88,9 +89,10 @@ class EndToEndEncoderWrapper(nn.Module):
         T = embeds.shape[1]
 
         # 3. Dynamic 2D chunked causal mask without vmap
-        device = embeds.device
-        q = torch.arange(T, device=device)[:, None]
-        k = torch.arange(T, device=device)[None, :]
+        # Use cumsum on new_ones to guarantee device-agnostic execution in TorchScript on CUDA and CPU
+        idx = torch.cumsum(embeds.new_ones(T, dtype=torch.long), dim=0) - 1
+        q = idx[:, None]
+        k = idx[None, :]
         q_chunk = torch.div(q, self.chunk_size, rounding_mode="trunc")
         kv_chunk = torch.div(k, self.chunk_size, rounding_mode="trunc")
         diff = q_chunk - kv_chunk
