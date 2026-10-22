@@ -284,8 +284,8 @@ impl WebSocketHandler {
                             silent_chunks += 1;
                         }
 
-                        // Sentence pause detection: ~1.2s (12 chunks) of silence after speech -> finalize sentence
-                        if speech_detected && silent_chunks >= 12 && audio_buffer.len() >= 16000 {
+                        // Sentence pause detection: ~0.96s (6 chunks of 160ms) of silence after speech -> finalize sentence
+                        if speech_detected && silent_chunks >= 6 && audio_buffer.len() >= 4800 {
                             let model = self.service.model.clone();
                             let buf_clone = audio_buffer.clone();
                             let lang_target = active_language.to_nemotron_lang().to_string();
@@ -318,8 +318,8 @@ impl WebSocketHandler {
                             silent_chunks = 0;
                             last_inference_time = std::time::Instant::now();
                         }
-                        // Periodic partial transcription update every ~600ms while speech is ongoing
-                        else if speech_detected && audio_buffer.len() >= 6000 && last_inference_time.elapsed().as_millis() >= 600 {
+                        // Streaming partial transcription update every ~160ms chunk while speech is ongoing
+                        else if speech_detected && audio_buffer.len() >= 2560 && last_inference_time.elapsed().as_millis() >= 160 {
                             last_inference_time = std::time::Instant::now();
                             let model = self.service.model.clone();
                             let buf_clone = audio_buffer.clone();
