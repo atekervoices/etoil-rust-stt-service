@@ -100,8 +100,16 @@ class EndToEndEncoderWrapper(nn.Module):
         attention_mask = mask.unsqueeze(0).unsqueeze(0) # [1, 1, T, T]
         all_masked_rows = torch.all(~attention_mask, dim=-1)
 
-        # 4. Position embeddings
-        pos_emb = self.encoder.encode_positions(embeds, cached_frames=0)
+        # 4. Position embeddings (device-agnostic relative sinusoidal positional encoding)
+        hidden_size = embeds.shape[-1]
+        seq_length = embeds.shape[1]
+        num_pos = 2 * seq_length - 1
+        ramp_pos = torch.cumsum(embeds.new_ones(num_pos, dtype=torch.long), dim=0) - 1
+        pos_ids = ((seq_length - 1) - ramp_pos).float()[None, None, :]
+        ramp_dim = (torch.cumsum(embeds.new_ones(hidden_size // 2), dim=0) - 1).float()
+        inv_f = (1.0 / (10000.0 ** (2.0 * ramp_dim / hidden_size)))[None, :, None].expand(embeds.shape[0], -1, -1)
+        freqs = (inv_f @ pos_ids).transpose(1, 2)
+        pos_emb = torch.stack([freqs.sin(), freqs.cos()], dim=-1).reshape(embeds.shape[0], num_pos, -1).to(dtype=embeds.dtype)
 
         # 5. Conformer Layers
         hidden_states = embeds
