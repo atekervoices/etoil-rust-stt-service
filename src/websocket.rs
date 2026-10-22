@@ -284,8 +284,11 @@ impl WebSocketHandler {
                             silent_chunks += 1;
                         }
 
-                        // Sentence pause detection: ~0.96s (6 chunks of 160ms) of silence after speech -> finalize sentence
-                        if speech_detected && silent_chunks >= 6 && audio_buffer.len() >= 4800 {
+                        // Sentence pause detection: ~0.8s (5 chunks of 160ms) of silence OR continuous speech ceiling (4.5s)
+                        let max_buffer_exceeded = audio_buffer.len() >= (sample_rate as usize * 45 / 10); // 4.5 seconds
+                        let pause_detected = speech_detected && silent_chunks >= 5 && audio_buffer.len() >= 4800;
+
+                        if pause_detected || max_buffer_exceeded {
                             let model = self.service.model.clone();
                             let buf_clone = audio_buffer.clone();
                             let lang_target = active_language.to_nemotron_lang().to_string();
@@ -312,14 +315,25 @@ impl WebSocketHandler {
                                     }).await;
                                 }
                             }
-                            audio_buffer.clear();
+
+                            if max_buffer_exceeded && !pause_detected {
+                                // Continuous speech (e.g. fast radio presenter): retain ~0.64s overlap context
+                                let overlap = (sample_rate as usize * 64 / 100).min(audio_buffer.len());
+                                let start_idx = audio_buffer.len() - overlap;
+                                audio_buffer = audio_buffer[start_idx..].to_vec();
+                                speech_detected = true;
+                                silent_chunks = 0;
+                            } else {
+                                audio_buffer.clear();
+                                speech_detected = false;
+                                silent_chunks = 0;
+                            }
+
                             last_emitted_text.clear();
-                            speech_detected = false;
-                            silent_chunks = 0;
                             last_inference_time = std::time::Instant::now();
                         }
-                        // Streaming partial transcription update every ~160ms chunk while speech is ongoing
-                        else if speech_detected && audio_buffer.len() >= 2560 && last_inference_time.elapsed().as_millis() >= 160 {
+                        // Streaming partial transcription update every ~320ms while speech is ongoing
+                        else if speech_detected && audio_buffer.len() >= 2560 && last_inference_time.elapsed().as_millis() >= 320 {
                             last_inference_time = std::time::Instant::now();
                             let model = self.service.model.clone();
                             let buf_clone = audio_buffer.clone();

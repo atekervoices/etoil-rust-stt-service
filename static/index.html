@@ -9,7 +9,7 @@
     <header>
         <h1>etoil-rust-stt-service</h1>
         <p>NVIDIA Nemotron 3.5 Streaming ASR (FastConformer RNN-T 0.6B)</p>
-        <p>Status: <strong id="wsStatusText">Disconnected</strong></p>
+        <p>Status: <strong id="wsStatusText" style="color: red;">Disconnected</strong></p>
     </header>
     <hr>
 
@@ -18,22 +18,20 @@
             <label for="langSelect">Target Language: </label>
             <select id="langSelect">
                 <option value="lug" selected>Luganda (Oluganda) - lug</option>
-                <option value="en-gb">English (UK / Commonwealth / East Africa) - en-GB</option>
                 <option value="en">English (US) - en-US</option>
-                <option value="es">Spanish (Español) - es-ES</option>
-                <option value="fr">French (Français) - fr-FR</option>
+                <option value="sw">Swahili (Kiswahili) - sw-KE</option>
+                <option value="es">Spanish (Espanol) - es-ES</option>
+                <option value="fr">French (Francais) - fr-FR</option>
                 <option value="de">German (Deutsch) - de-DE</option>
                 <option value="it">Italian (Italiano) - it-IT</option>
-                <option value="pt">Portuguese (Português) - pt-BR</option>
-                <option value="ru">Russian (Русский) - ru-RU</option>
+                <option value="pt">Portuguese (Portugues) - pt-BR</option>
+                <option value="ru">Russian - ru-RU</option>
                 <option value="zh">Chinese (Mandarin) - zh-CN</option>
-                <option value="ja">Japanese (日本語) - ja-JP</option>
-                <option value="ko">Korean (한국어) - ko-KR</option>
-                <option value="hi">Hindi (हिन्दी) - hi-IN</option>
-                <option value="ar">Arabic (العربية) - ar-AR</option>
-                <option value="tr">Turkish (Türkçe) - tr-TR</option>
-                <option value="vi">Vietnamese (Tiếng Việt) - vi-VN</option>
-                <option value="sw">Swahili (Kiswahili) - sw-KE</option>
+                <option value="ja">Japanese - ja-JP</option>
+                <option value="ko">Korean - ko-KR</option>
+                <option value="hi">Hindi - hi-IN</option>
+                <option value="ar">Arabic - ar-AR</option>
+                <option value="tr">Turkish - tr-TR</option>
                 <option value="auto">Auto-Detect (auto)</option>
             </select>
         </div>
@@ -47,33 +45,47 @@
         <br>
 
         <div>
+            <label for="radioUrlInput">Online Radio URL: </label>
+            <input type="text" id="radioUrlInput" value="http://162.244.80.52:8732/;stream.mp3" size="50">
+            <button id="startRadioBtn">Start Radio Stream</button>
+            <button id="stopRadioBtn" disabled>Stop Radio Stream</button>
+        </div>
+        <br>
+
+        <div>
             <canvas id="waveform" width="600" height="50" style="border: 1px solid #999; display: block;"></canvas>
         </div>
         <br>
 
         <div>
             <p>
-                <strong>Chunk Size:</strong> 560 ms | 
+                <strong>Chunk Size:</strong> 160 ms | 
                 <strong>Sample Rate:</strong> 16,000 Hz | 
-                <strong>Samples / Chunk:</strong> 8,960 | 
-                <strong>Active Language:</strong> <span id="activeLangDisplay">en-gb</span>
+                <strong>Samples / Chunk:</strong> 2,560 | 
+                <strong>Active Language:</strong> <span id="activeLangDisplay">lug</span>
             </p>
         </div>
 
         <div>
             <h3>Transcription Stream</h3>
             <div id="transcriptBox" style="border: 1px solid #999; padding: 12px; min-height: 120px; max-height: 400px; overflow-y: auto; font-family: monospace;">
-                <span id="placeholder" style="color: #666;">Click "Start Microphone" and speak...</span>
+                <span id="placeholder" style="color: #666;">Click "Start Microphone" or "Start Radio Stream" and speak or listen...</span>
                 <span id="confirmedText"></span>
                 <span id="partialText" style="color: #0066cc;"></span>
             </div>
         </div>
     </main>
 
+    <audio id="radioPlayer" crossorigin="anonymous" preload="none" style="display: none;"></audio>
+
     <script>
         const wsStatusText = document.getElementById('wsStatusText');
         const startMicBtn = document.getElementById('startMicBtn');
         const stopMicBtn = document.getElementById('stopMicBtn');
+        const startRadioBtn = document.getElementById('startRadioBtn');
+        const stopRadioBtn = document.getElementById('stopRadioBtn');
+        const radioUrlInput = document.getElementById('radioUrlInput');
+        const radioPlayer = document.getElementById('radioPlayer');
         const langSelect = document.getElementById('langSelect');
         const activeLangDisplay = document.getElementById('activeLangDisplay');
         const confirmedText = document.getElementById('confirmedText');
@@ -86,19 +98,32 @@
         let ws = null;
         let audioContext = null;
         let mediaStream = null;
+        let radioSource = null;
         let processor = null;
-        let isRecording = false;
+        let isStreaming = false;
+        let streamMode = 'none'; // 'mic' or 'radio'
+        let audioBufferQueue = [];
 
-        const CHUNK_SIZE = 8960; // 560ms at 16kHz
+        const TARGET_SR = 16000;
+        const CHUNK_SAMPLES = 2560; // 160ms at 16kHz
 
         function connectWebSocket() {
-            const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-            const host = (window.location.hostname === 'localhost') ? `127.0.0.1:${window.location.port}` : window.location.host;
+            const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+            const isFile = window.location.protocol === 'file:' || !window.location.hostname;
             const lang = langSelect.value;
-            const wsUrl = `${proto}//${host}/v1/realtime?language=${lang}`;
+
+            let wsUrl;
+            if (isFile) {
+                wsUrl = `wss://stt-staging.atekervoices.com/v1/realtime?language=${lang}`;
+            } else {
+                const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const host = isLocal ? `127.0.0.1:${window.location.port || '8000'}` : window.location.host;
+                wsUrl = `${proto}//${host}/v1/realtime?language=${lang}`;
+            }
 
             console.log('Connecting WebSocket to:', wsUrl);
             ws = new WebSocket(wsUrl);
+            ws.binaryType = 'arraybuffer';
 
             ws.onopen = () => {
                 wsStatusText.textContent = 'Connected (Nemotron Ready)';
@@ -133,7 +158,7 @@
                 ws.send(JSON.stringify({
                     type: 'config',
                     language: lang,
-                    sample_rate: 16000
+                    sample_rate: TARGET_SR
                 }));
             }
         }
@@ -152,10 +177,8 @@
         });
 
         function downsampleTo16k(buffer, inputSampleRate) {
-            if (inputSampleRate === 16000) {
-                return buffer;
-            }
-            const ratio = inputSampleRate / 16000;
+            if (inputSampleRate === TARGET_SR) return buffer;
+            const ratio = inputSampleRate / TARGET_SR;
             const newLength = Math.round(buffer.length / ratio);
             const result = new Float32Array(newLength);
             for (let i = 0; i < newLength; i++) {
@@ -169,12 +192,32 @@
             return result;
         }
 
+        function feedAudioSamples(samplesFloat32, inputSampleRate) {
+            const resampled = downsampleTo16k(samplesFloat32, inputSampleRate);
+            for (let i = 0; i < resampled.length; i++) {
+                audioBufferQueue.push(resampled[i]);
+            }
+
+            // Slice out exact 160ms chunks (2560 samples = 5120 bytes)
+            while (audioBufferQueue.length >= CHUNK_SAMPLES) {
+                const slice = audioBufferQueue.splice(0, CHUNK_SAMPLES);
+                const pcm16 = new Int16Array(CHUNK_SAMPLES);
+                for (let i = 0; i < CHUNK_SAMPLES; i++) {
+                    const s = Math.max(-1, Math.min(1, slice[i]));
+                    pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+                }
+
+                if (ws && ws.readyState === WebSocket.OPEN) {
+                    ws.send(pcm16.buffer);
+                }
+            }
+        }
+
         function handleServerMessage(msg) {
-            console.log('[STT Server Message]', msg);
             const transcriptBox = document.getElementById('transcriptBox');
             if (msg.type === 'ready') {
-                console.log('Model ready:', msg);
                 wsStatusText.textContent = 'Connected (Nemotron Ready)';
+                wsStatusText.style.color = '#10b981';
             } else if (msg.type === 'transcript') {
                 placeholder.style.display = 'none';
                 if (!msg.is_final) {
@@ -210,8 +253,22 @@
             }
         }
 
-        async function startRecording() {
+        async function startMicrophone() {
             try {
+                audioBufferQueue = [];
+                streamMode = 'mic';
+
+                const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                try {
+                    audioContext = new AudioCtx({ sampleRate: 16000 });
+                } catch (e) {
+                    audioContext = new AudioCtx();
+                }
+                if (audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                }
+                const actualSampleRate = audioContext.sampleRate;
+
                 mediaStream = await navigator.mediaDevices.getUserMedia({
                     audio: {
                         channelCount: 1,
@@ -221,75 +278,134 @@
                     }
                 });
 
-                try {
-                    audioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
-                } catch (e) {
-                    audioContext = new (window.AudioContext || window.webkitAudioContext)();
-                }
-                if (audioContext.state === 'suspended') {
-                    await audioContext.resume();
-                }
-                const actualSampleRate = audioContext.sampleRate;
-                console.log(`AudioContext active at sampleRate: ${actualSampleRate} Hz`);
-
                 const source = audioContext.createMediaStreamSource(mediaStream);
                 processor = audioContext.createScriptProcessor(4096, 1, 1);
                 source.connect(processor);
 
-                // Mute destination to prevent mic-to-speaker feedback
+                // Mute mic output to speakers to prevent audio feedback loop
                 const muteNode = audioContext.createGain();
                 muteNode.gain.value = 0.0;
                 processor.connect(muteNode);
                 muteNode.connect(audioContext.destination);
 
                 processor.onaudioprocess = (e) => {
-                    if (!isRecording) return;
+                    if (!isStreaming) return;
                     const inputData = e.inputBuffer.getChannelData(0);
                     drawWaveform(inputData);
-
-                    // Downsample to 16,000 Hz if hardware is 44.1k/48k
-                    const resampled16k = downsampleTo16k(inputData, actualSampleRate);
-
-                    // Convert float32 to int16 PCM
-                    const pcm16 = new Int16Array(resampled16k.length);
-                    for (let i = 0; i < resampled16k.length; i++) {
-                        const s = Math.max(-1, Math.min(1, resampled16k[i]));
-                        pcm16[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-                    }
-
-                    // Direct binary PCM streaming to server
-                    if (ws && ws.readyState === WebSocket.OPEN) {
-                        ws.send(pcm16.buffer);
-                    }
+                    feedAudioSamples(inputData, actualSampleRate);
                 };
 
-                isRecording = true;
+                isStreaming = true;
                 startMicBtn.disabled = true;
                 stopMicBtn.disabled = false;
+                startRadioBtn.disabled = true;
                 placeholder.style.display = 'none';
             } catch (err) {
-                console.error('Error accessing microphone:', err);
-                alert('Microphone access failed: ' + err.message);
+                console.error('Microphone error:', err);
+                alert('Microphone error: ' + err.message);
+                stopAllStreaming();
             }
         }
 
-        function stopRecording() {
-            isRecording = false;
+        async function startRadio() {
+            try {
+                audioBufferQueue = [];
+                streamMode = 'radio';
+
+                const AudioCtx = window.AudioContext || window.webkitAudioContext;
+                try {
+                    audioContext = new AudioCtx({ sampleRate: 16000 });
+                } catch (e) {
+                    audioContext = new AudioCtx();
+                }
+                if (audioContext.state === 'suspended') {
+                    await audioContext.resume();
+                }
+                const actualSampleRate = audioContext.sampleRate;
+
+                const streamUrl = radioUrlInput.value.trim() || 'http://162.244.80.52:8732/;stream.mp3';
+                radioPlayer.src = streamUrl;
+                radioPlayer.load();
+
+                if (!radioSource) {
+                    radioSource = audioContext.createMediaElementSource(radioPlayer);
+                }
+
+                processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+                // Route radio sound to computer speakers so user can listen
+                radioSource.connect(audioContext.destination);
+                // Also route radio sound to processor for 160ms STT chunking
+                radioSource.connect(processor);
+
+                // Mute processor output so sound is not duplicated
+                const muteNode = audioContext.createGain();
+                muteNode.gain.value = 0.0;
+                processor.connect(muteNode);
+                muteNode.connect(audioContext.destination);
+
+                await radioPlayer.play();
+
+                processor.onaudioprocess = (e) => {
+                    if (!isStreaming) return;
+                    const inputData = e.inputBuffer.getChannelData(0);
+                    drawWaveform(inputData);
+                    feedAudioSamples(inputData, actualSampleRate);
+                };
+
+                isStreaming = true;
+                startRadioBtn.disabled = true;
+                stopRadioBtn.disabled = false;
+                startMicBtn.disabled = true;
+                placeholder.style.display = 'none';
+            } catch (err) {
+                console.error('Radio stream error:', err);
+                alert('Radio stream error: ' + err.message);
+                stopAllStreaming();
+            }
+        }
+
+        function stopAllStreaming() {
+            isStreaming = false;
             startMicBtn.disabled = false;
             stopMicBtn.disabled = true;
+            startRadioBtn.disabled = false;
+            stopRadioBtn.disabled = true;
+
+            if (radioPlayer) {
+                try {
+                    radioPlayer.pause();
+                    radioPlayer.src = '';
+                } catch (e) {}
+            }
 
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: 'flush' }));
             }
 
-            if (processor) processor.disconnect();
-            if (mediaStream) mediaStream.getTracks().forEach(t => t.stop());
-            if (audioContext) audioContext.close();
+            if (processor) {
+                try { processor.disconnect(); } catch (e) {}
+                processor = null;
+            }
+
+            if (mediaStream) {
+                try { mediaStream.getTracks().forEach(t => t.stop()); } catch (e) {}
+                mediaStream = null;
+            }
+
+            if (audioContext && audioContext.state !== 'closed') {
+                try { audioContext.close(); } catch (e) {}
+                audioContext = null;
+                radioSource = null;
+            }
+
             clearWaveform();
         }
 
-        startMicBtn.addEventListener('click', startRecording);
-        stopMicBtn.addEventListener('click', stopRecording);
+        startMicBtn.addEventListener('click', startMicrophone);
+        stopMicBtn.addEventListener('click', stopAllStreaming);
+        startRadioBtn.addEventListener('click', startRadio);
+        stopRadioBtn.addEventListener('click', stopAllStreaming);
 
         function drawWaveform(data) {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
