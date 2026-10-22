@@ -25,6 +25,7 @@ services:
       - RUST_LOG=info
       - MODEL_PATH=/app/torchscript_model
       - PORT=8099
+      - TORCH_CPP_LOG_LEVEL=ERROR
       - HF_TOKEN=${HF_TOKEN}
     restart: unless-stopped
     healthcheck:

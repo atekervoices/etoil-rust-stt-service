@@ -132,6 +132,8 @@ class DecoderWrapper(nn.Module):
     def __init__(self, m):
         super().__init__()
         self.decoder = m.decoder
+        if hasattr(self.decoder.lstm, "flatten_parameters"):
+            self.decoder.lstm.flatten_parameters()
 
     def forward(self, input_ids, h, c):
         emb = self.decoder.embedding(input_ids)

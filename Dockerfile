@@ -109,6 +109,7 @@ EXPOSE 8099
 ENV RUST_LOG=info
 ENV MODEL_PATH=/app/torchscript_model
 ENV PORT=8099
+ENV TORCH_CPP_LOG_LEVEL=ERROR
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8099/health || exit 1
