@@ -238,12 +238,6 @@ impl WebSocketHandler {
                                             last_emitted_final = final_text.clone();
                                             println!("[Final  | {}] {}", active_language.code(), text_to_emit);
 
-                                            let _ = tx.send(WSMessage::Transcript {
-                                                text: text_to_emit.clone(),
-                                                is_final: true,
-                                                finalize: Some(true),
-                                            }).await;
-
                                             let _ = tx.send(WSMessage::Final {
                                                 text: text_to_emit,
                                                 confidence: 0.95,
@@ -302,11 +296,6 @@ impl WebSocketHandler {
                                 let final_text = transcript.trim().to_string();
                                 if !final_text.is_empty() {
                                     println!("[Sentence | {}] {}", active_language.code(), final_text);
-                                    let _ = tx.send(WSMessage::Transcript {
-                                        text: final_text.clone(),
-                                        is_final: true,
-                                        finalize: Some(true),
-                                    }).await;
                                     let _ = tx.send(WSMessage::Final {
                                         text: final_text,
                                         confidence: 0.95,
@@ -354,12 +343,6 @@ impl WebSocketHandler {
                                     };
                                     last_emitted_text = current_clean.clone();
                                     println!("[Stream | {}] {}", active_language.code(), current_clean);
-
-                                    let _ = tx.send(WSMessage::Transcript {
-                                        text: current_clean.clone(),
-                                        is_final: false,
-                                        finalize: None,
-                                    }).await;
 
                                     let _ = tx.send(WSMessage::Partial {
                                         text: delta,
