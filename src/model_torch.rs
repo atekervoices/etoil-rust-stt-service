@@ -14,10 +14,25 @@ pub struct NemotronTorchModel {
     prompt_dictionary: HashMap<String, i64>,
     blank_id: i64,
     default_prompt_id: i64,
+    device: Device,
 }
 
 impl NemotronTorchModel {
     pub fn load<P: AsRef<Path>>(dir: P) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let device = if tch::Cuda::is_available() {
+            println!("CUDA detected! Initializing Nemotron models on GPU (cuda:0)...");
+            Device::Cuda(0)
+        } else {
+            println!("CUDA not detected. Initializing Nemotron models on CPU...");
+            Device::Cpu
+        };
+        Self::load_with_device(dir, device)
+    }
+
+    pub fn load_with_device<P: AsRef<Path>>(
+        dir: P,
+        device: Device,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let dir = dir.as_ref();
         let enc_path = dir.join("encoder.pt");
         let dec_path = dir.join("decoder.pt");
@@ -25,12 +40,12 @@ impl NemotronTorchModel {
         let tok_path = dir.join("tokenizer.json");
         let prompt_dict_path = dir.join("prompt_dictionary.json");
 
-        println!("Loading TorchScript models from {}...", dir.display());
-        let mut encoder = CModule::load(&enc_path)
+        println!("Loading TorchScript models from {} onto {:?}...", dir.display(), device);
+        let mut encoder = CModule::load_on_device(&enc_path, device)
             .map_err(|e| format!("Failed to load {}: {e}", enc_path.display()))?;
-        let mut decoder = CModule::load(&dec_path)
+        let mut decoder = CModule::load_on_device(&dec_path, device)
             .map_err(|e| format!("Failed to load {}: {e}", dec_path.display()))?;
-        let mut joint = CModule::load(&joint_path)
+        let mut joint = CModule::load_on_device(&joint_path, device)
             .map_err(|e| format!("Failed to load {}: {e}", joint_path.display()))?;
 
         encoder.set_eval();
@@ -54,7 +69,7 @@ impl NemotronTorchModel {
         // Default prompt id is 63 for Luganda
         let default_prompt_id = *prompt_dictionary.get("lug").unwrap_or(&63);
 
-        println!("NemotronTorchModel loaded successfully (blank_id: {blank_id}, default_prompt: {default_prompt_id}).");
+        println!("NemotronTorchModel loaded successfully on {:?} (blank_id: {blank_id}, default_prompt: {default_prompt_id}).", device);
 
         Ok(Self {
             encoder: Arc::new(encoder),
@@ -64,7 +79,12 @@ impl NemotronTorchModel {
             prompt_dictionary,
             blank_id,
             default_prompt_id,
+            device,
         })
+    }
+
+    pub fn device(&self) -> Device {
+        self.device
     }
 
     /// Resolve language code to model prompt ID
@@ -127,23 +147,27 @@ impl NemotronTorchModel {
 
         let _guard = tch::no_grad_guard();
 
-        // 2. Prepare raw audio waveform tensor: shape [1, N]
+        // 2. Prepare raw audio waveform tensor: shape [1, N] on target device
         let wav_tensor = Tensor::from_slice(&audio_16k)
             .unsqueeze(0)
-            .to_kind(Kind::Float);
+            .to_kind(Kind::Float)
+            .to_device(self.device);
         let prompt_id = self.resolve_prompt_id(language);
-        let prompt_tensor = Tensor::from_slice(&[prompt_id]).to_kind(Kind::Int64);
+        let prompt_tensor = Tensor::from_slice(&[prompt_id])
+            .to_kind(Kind::Int64)
+            .to_device(self.device);
 
         // 3. Run End-to-End Encoder: waveform [1, N] -> audio features [1, T, 640]
         let enc_out = self.encoder.forward_ts(&[wav_tensor, prompt_tensor])?;
         let num_frames = enc_out.size()[1];
 
-        // 4. Initialize Decoder LSTM states (2 layers, hidden size 640)
-        let mut h = Tensor::zeros([2, 1, 640], (Kind::Float, Device::Cpu));
-        let mut c = Tensor::zeros([2, 1, 640], (Kind::Float, Device::Cpu));
+        // 4. Initialize Decoder LSTM states (2 layers, hidden size 640) on target device
+        let mut h = Tensor::zeros([2, 1, 640], (Kind::Float, self.device));
+        let mut c = Tensor::zeros([2, 1, 640], (Kind::Float, self.device));
         let mut last_token = Tensor::from_slice(&[self.blank_id])
             .unsqueeze(0)
-            .to_kind(Kind::Int64);
+            .to_kind(Kind::Int64)
+            .to_device(self.device);
 
         let (mut dec_out, new_h, new_c) = self.step_decoder(&last_token, &h, &c)?;
         h = new_h;
@@ -167,7 +191,8 @@ impl NemotronTorchModel {
                 emitted_tokens.push(token as u32);
                 last_token = Tensor::from_slice(&[token])
                     .unsqueeze(0)
-                    .to_kind(Kind::Int64);
+                    .to_kind(Kind::Int64)
+                    .to_device(self.device);
                 let (next_dec_out, next_h, next_c) = self.step_decoder(&last_token, &h, &c)?;
                 dec_out = next_dec_out;
                 h = next_h;

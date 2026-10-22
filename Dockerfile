@@ -48,7 +48,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-ARG LIBTORCH_URL="https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.4.0%2Bcpu.zip"
+ARG LIBTORCH_URL="https://download.pytorch.org/libtorch/cu124/libtorch-cxx11-abi-shared-with-deps-2.4.0%2Bcu124.zip"
 
 RUN mkdir -p /usr/local/libtorch && \
     echo "Downloading LibTorch from ${LIBTORCH_URL}..." && \
@@ -70,12 +70,14 @@ COPY static ./static
 RUN cargo build --release --bin api_server
 
 # ------------------------------------------------------------------------------
-# Stage 3: Minimal Production Runtime
+# Stage 3: Minimal Production Runtime with NVIDIA CUDA
 # ------------------------------------------------------------------------------
-FROM debian:12-slim
+FROM nvidia/cuda:12.4.1-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/local/libtorch/lib:${LD_LIBRARY_PATH}
+ENV NVIDIA_VISIBLE_DEVICES=all
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \

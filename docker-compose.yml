@@ -8,11 +8,20 @@ services:
     container_name: nemotron-stt-service
     ports:
       - "8099:8099"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     volumes:
       # Optional: Uncomment only if you wish to override baked-in model with host weights:
       # - ./torchscript_model:/app/torchscript_model:ro
       - ./audio:/app/audio:ro
     environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - RUST_LOG=info
       - MODEL_PATH=/app/torchscript_model
       - PORT=8099
