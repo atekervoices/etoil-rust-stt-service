@@ -618,7 +618,7 @@ pub async fn run_server(service: Arc<NemotronService>, port: u16) {
                     "/v1/realtime": {
                         "get": {
                             "summary": "Real-time Streaming WebSocket",
-                            "description": "Bidirectional WebSocket connection for live 80ms (right-context 0) cache-aware streaming. Connect with query param e.g. ws://localhost:8099/v1/realtime?language=en. Supported messages: direct raw 16-bit PCM binary streaming or JSON 'audio' (base64 PCM), 'partial' (delta text), 'final' (completed utterance), 'reset', 'flush'.",
+                            "description": "Bidirectional WebSocket connection for live cache-aware streaming. Connect with query param e.g. ws://localhost:8099/v1/realtime?language=en. Supported messages: direct raw 16-bit PCM binary streaming or JSON 'audio' (base64 PCM), 'partial' (delta text), 'final' (completed utterance), 'reset', 'flush'.",
                             "parameters": [
                                 {
                                     "name": "language",
@@ -741,7 +741,7 @@ pub async fn run_server(service: Arc<NemotronService>, port: u16) {
 
     println!("============================================================");
     println!(" PhosAI Elgon Streaming ASR Service running on port {port}");
-    println!(" Engine: LibTorch (tch-rs) | FastConformer RNN-Transducer (80ms lookahead / right-context = 0)");
+    println!(" Engine: LibTorch (tch-rs) | FastConformer RNN-Transducer (320ms lookahead / right-context = 3)");
     println!(" Languages: English (en, eng, en-UG, eng-UG) & Luganda (lug, lg, lug-UG)");
     println!(" Model: {model_id}");
     println!("------------------------------------------------------------");

@@ -151,18 +151,38 @@ class EndToEndEncoderWrapper(nn.Module):
         fused = self.prompt_projector(torch.cat([hidden_states, one_hot], dim=-1))
         return self.encoder_projector(fused)
 
-# 3. Decoder Wrapper
+# 3. Decoder Wrapper (uses LSTMCell per layer to avoid cuDNN _cudnn_rnn weight compaction warnings on GPU)
 class DecoderWrapper(nn.Module):
     def __init__(self, m):
         super().__init__()
-        self.decoder = m.decoder
-        if hasattr(self.decoder.lstm, "flatten_parameters"):
-            self.decoder.lstm.flatten_parameters()
+        self.embedding = m.decoder.embedding
+        self.decoder_projector = m.decoder.decoder_projector
+        src_lstm = m.decoder.lstm
+        self.num_layers = src_lstm.num_layers
+        cells = []
+        for i in range(self.num_layers):
+            input_size = src_lstm.input_size if i == 0 else src_lstm.hidden_size
+            cell = nn.LSTMCell(input_size, src_lstm.hidden_size, bias=src_lstm.bias)
+            cell.weight_ih.data.copy_(getattr(src_lstm, f"weight_ih_l{i}").data)
+            cell.weight_hh.data.copy_(getattr(src_lstm, f"weight_hh_l{i}").data)
+            if src_lstm.bias:
+                cell.bias_ih.data.copy_(getattr(src_lstm, f"bias_ih_l{i}").data)
+                cell.bias_hh.data.copy_(getattr(src_lstm, f"bias_hh_l{i}").data)
+            cells.append(cell)
+        self.cells = nn.ModuleList(cells)
 
-    def forward(self, input_ids, h, c):
-        emb = self.decoder.embedding(input_ids)
-        lstm_out, (new_h, new_c) = self.decoder.lstm(emb, (h, c))
-        dec_out = self.decoder.decoder_projector(lstm_out)
+    def forward(self, input_ids: torch.Tensor, h: torch.Tensor, c: torch.Tensor):
+        x = self.embedding(input_ids).squeeze(1)
+        new_h_list = []
+        new_c_list = []
+        for i, cell in enumerate(self.cells):
+            hx, cx = cell(x, (h[i], c[i]))
+            x = hx
+            new_h_list.append(hx)
+            new_c_list.append(cx)
+        new_h = torch.stack(new_h_list, dim=0)
+        new_c = torch.stack(new_c_list, dim=0)
+        dec_out = self.decoder_projector(x.unsqueeze(1))
         return dec_out, new_h, new_c
 
 # 4. Joint Wrapper
