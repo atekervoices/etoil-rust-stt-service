@@ -94,15 +94,15 @@ impl WebSocketHandler {
         }
 
         // Send ready handshake on connection
+        let model_id = std::env::var("MODEL_ID")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "phosai/elgon-streaming-v1".to_string());
         let ready_msg = WSMessage::Ready {
-            model: "nvidia-nemotron-3.5-torch".to_string(),
+            model: model_id,
             supported_languages: vec![
+                "en (English)".to_string(),
                 "lug (Luganda)".to_string(),
-                "en (English US)".to_string(),
-                "sw (Swahili)".to_string(),
-                "es (Spanish)".to_string(),
-                "fr (French)".to_string(),
-                "de (German)".to_string(),
                 "auto (Auto-detect)".to_string(),
             ],
         };
@@ -278,9 +278,9 @@ impl WebSocketHandler {
                             silent_chunks += 1;
                         }
 
-                        // Sentence pause detection: ~0.8s (5 chunks of 160ms) of silence OR continuous speech ceiling (4.5s)
+                        // Sentence pause detection: ~0.8s (10 chunks of 80ms) of silence OR continuous speech ceiling (4.5s)
                         let max_buffer_exceeded = audio_buffer.len() >= (sample_rate as usize * 45 / 10); // 4.5 seconds
-                        let pause_detected = speech_detected && silent_chunks >= 5 && audio_buffer.len() >= 4800;
+                        let pause_detected = speech_detected && silent_chunks >= 10 && audio_buffer.len() >= 4800;
 
                         if pause_detected || max_buffer_exceeded {
                             let model = self.service.model.clone();
@@ -321,8 +321,8 @@ impl WebSocketHandler {
                             last_emitted_text.clear();
                             last_inference_time = std::time::Instant::now();
                         }
-                        // Streaming partial transcription update every ~320ms while speech is ongoing
-                        else if speech_detected && audio_buffer.len() >= 2560 && last_inference_time.elapsed().as_millis() >= 320 {
+                        // Streaming partial transcription update with 80ms lookahead (1280 samples @ 16kHz)
+                        else if speech_detected && audio_buffer.len() >= 1280 && last_inference_time.elapsed().as_millis() >= 80 {
                             last_inference_time = std::time::Instant::now();
                             let model = self.service.model.clone();
                             let buf_clone = audio_buffer.clone();

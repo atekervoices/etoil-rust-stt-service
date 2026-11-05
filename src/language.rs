@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 
-/// Audio streaming constants for Nemotron 3.5 cache-aware ASR
+/// Audio streaming constants for Elgon / Nemotron 3.5 cache-aware ASR (80ms lookahead / right-context = 0)
 pub const SAMPLE_RATE: usize = 16000;
-pub const CHUNK_DURATION_MS: usize = 560;
-/// 560ms chunks at 16kHz = 8960 audio samples (matching official right-context 6 FastConformer)
-pub const CHUNK_SIZE: usize = 8960;
+pub const CHUNK_DURATION_MS: usize = 80;
+/// 80ms chunks at 16kHz = 1280 audio samples (matching right-context 0 FastConformer)
+pub const CHUNK_SIZE: usize = 1280;
 
 /// Languages supported by NVIDIA Nemotron 3.5 Streaming Multilingual ASR
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -60,38 +60,43 @@ pub enum SupportedLanguage {
 impl SupportedLanguage {
     /// Parse and validate user-supplied language code.
     pub fn parse(lang: &str) -> Result<Self, String> {
-        let normalized = lang.trim().to_lowercase();
+        let normalized = lang.trim().to_lowercase().replace('_', "-");
         match normalized.as_str() {
-            "en" | "eng" | "english" | "en-us" | "en_us" | "us" | "american" => {
-                Ok(SupportedLanguage::English)
-            }
-            "en-gb" | "eng-gb" | "en_gb" | "british" | "commonwealth" => {
+            "en" | "eng" | "english" | "en-us" | "eng-us" | "en-ug" | "eng-ug"
+            | "ugandan-english" | "us" | "american" => Ok(SupportedLanguage::English),
+            "en-gb" | "eng-gb" | "british" | "commonwealth" => {
                 Ok(SupportedLanguage::EnglishGB)
             }
-            "es" | "spa" | "spanish" | "es-es" | "es_es" => Ok(SupportedLanguage::Spanish),
-            "fr" | "fra" | "fre" | "french" | "fr-fr" | "fr_fr" => Ok(SupportedLanguage::French),
-            "de" | "deu" | "ger" | "german" | "de-de" | "de_de" => Ok(SupportedLanguage::German),
-            "it" | "ita" | "italian" | "it-it" | "it_it" => Ok(SupportedLanguage::Italian),
-            "pt" | "por" | "portuguese" | "pt-br" | "pt_br" => Ok(SupportedLanguage::Portuguese),
-            "ru" | "rus" | "russian" | "ru-ru" | "ru_ru" => Ok(SupportedLanguage::Russian),
-            "zh" | "zho" | "chi" | "chinese" | "zh-cn" | "zh_cn" => {
+            "es" | "spa" | "spanish" | "es-es" => Ok(SupportedLanguage::Spanish),
+            "fr" | "fra" | "fre" | "french" | "fr-fr" => Ok(SupportedLanguage::French),
+            "de" | "deu" | "ger" | "german" | "de-de" => Ok(SupportedLanguage::German),
+            "it" | "ita" | "italian" | "it-it" => Ok(SupportedLanguage::Italian),
+            "pt" | "por" | "portuguese" | "pt-br" => Ok(SupportedLanguage::Portuguese),
+            "ru" | "rus" | "russian" | "ru-ru" => Ok(SupportedLanguage::Russian),
+            "zh" | "zho" | "chi" | "chinese" | "zh-cn" => {
                 Ok(SupportedLanguage::Chinese)
             }
-            "ja" | "jpn" | "japanese" | "ja-jp" | "ja_jp" => Ok(SupportedLanguage::Japanese),
-            "ko" | "kor" | "korean" | "ko-kr" | "ko_kr" => Ok(SupportedLanguage::Korean),
-            "hi" | "hin" | "hindi" | "hi-in" | "hi_in" => Ok(SupportedLanguage::Hindi),
-            "ar" | "ara" | "arabic" | "ar-ar" | "ar_ar" => Ok(SupportedLanguage::Arabic),
-            "tr" | "tur" | "turkish" | "tr-tr" | "tr_tr" => Ok(SupportedLanguage::Turkish),
-            "vi" | "vie" | "vietnamese" | "vi-vn" | "vi_vn" => Ok(SupportedLanguage::Vietnamese),
-            "uk" | "ukr" | "ukrainian" | "uk-ua" | "uk_ua" => Ok(SupportedLanguage::Ukrainian),
-            "nl" | "nld" | "dutch" | "nl-nl" | "nl_nl" => Ok(SupportedLanguage::Dutch),
-            "pl" | "pol" | "polish" | "pl-pl" | "pl_pl" => Ok(SupportedLanguage::Polish),
-            "sv" | "swe" | "swedish" | "sv-se" | "sv_se" => Ok(SupportedLanguage::Swedish),
-            "sw" | "swa" | "swahili" | "sw-ke" | "sw_ke" => Ok(SupportedLanguage::Swahili),
-            "lug" | "luganda" | "ganda" | "lg" | "lug-ug" | "lug_ug" => {
+            "ja" | "jpn" | "japanese" | "ja-jp" => Ok(SupportedLanguage::Japanese),
+            "ko" | "kor" | "korean" | "ko-kr" => Ok(SupportedLanguage::Korean),
+            "hi" | "hin" | "hindi" | "hi-in" => Ok(SupportedLanguage::Hindi),
+            "ar" | "ara" | "arabic" | "ar-ar" => Ok(SupportedLanguage::Arabic),
+            "tr" | "tur" | "turkish" | "tr-tr" => Ok(SupportedLanguage::Turkish),
+            "vi" | "vie" | "vietnamese" | "vi-vn" => Ok(SupportedLanguage::Vietnamese),
+            "uk" | "ukr" | "ukrainian" | "uk-ua" => Ok(SupportedLanguage::Ukrainian),
+            "nl" | "nld" | "dutch" | "nl-nl" => Ok(SupportedLanguage::Dutch),
+            "pl" | "pol" | "polish" | "pl-pl" => Ok(SupportedLanguage::Polish),
+            "sv" | "swe" | "swedish" | "sv-se" => Ok(SupportedLanguage::Swedish),
+            "sw" | "swa" | "swahili" | "sw-ke" => Ok(SupportedLanguage::Swahili),
+            "lug" | "luganda" | "ganda" | "oluganda" | "lg" | "lug-ug" | "lg-ug" => {
                 Ok(SupportedLanguage::Luganda)
             }
             "auto" | "" | "default" => Ok(SupportedLanguage::Auto),
+            other if other.starts_with("en-") || other.starts_with("eng-") => {
+                Ok(SupportedLanguage::English)
+            }
+            other if other.starts_with("lug-") || other.starts_with("lg-") => {
+                Ok(SupportedLanguage::Luganda)
+            }
             other => Ok(SupportedLanguage::Custom(other.to_string(), other.to_string())),
         }
     }

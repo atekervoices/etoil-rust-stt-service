@@ -24,11 +24,15 @@ RUN pip install --no-cache-dir torch torchaudio --extra-index-url https://downlo
 RUN pip install --no-cache-dir transformers soundfile huggingface_hub librosa scipy
 
 ARG HF_TOKEN=""
+ARG MODEL_ID=""
+ARG LOOKAHEAD_TOKENS="0"
 ENV HF_TOKEN=${HF_TOKEN}
+ENV MODEL_ID=${MODEL_ID}
+ENV LOOKAHEAD_TOKENS=${LOOKAHEAD_TOKENS}
 
 COPY scripts/export_clean_torchscript.py /export/export_clean_torchscript.py
 
-RUN echo "Exporting TorchScript model from Hugging Face..." && \
+RUN echo "Exporting TorchScript model (${MODEL_ID}, lookahead_tokens=${LOOKAHEAD_TOKENS}) from Hugging Face..." && \
     OUTPUT_DIR=/export/torchscript_model python3 /export/export_clean_torchscript.py
 
 # ------------------------------------------------------------------------------
@@ -106,6 +110,8 @@ COPY --from=model-exporter /export/torchscript_model /app/torchscript_model
 
 EXPOSE 8099
 
+ARG MODEL_ID=""
+ENV MODEL_ID=${MODEL_ID}
 ENV RUST_LOG=info
 ENV MODEL_PATH=/app/torchscript_model
 ENV PORT=8099

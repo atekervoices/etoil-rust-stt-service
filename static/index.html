@@ -19,19 +19,6 @@
             <select id="langSelect">
                 <option value="lug" selected>Luganda (Oluganda) - lug</option>
                 <option value="en">English (US) - en-US</option>
-                <option value="sw">Swahili (Kiswahili) - sw-KE</option>
-                <option value="es">Spanish (Espanol) - es-ES</option>
-                <option value="fr">French (Francais) - fr-FR</option>
-                <option value="de">German (Deutsch) - de-DE</option>
-                <option value="it">Italian (Italiano) - it-IT</option>
-                <option value="pt">Portuguese (Portugues) - pt-BR</option>
-                <option value="ru">Russian - ru-RU</option>
-                <option value="zh">Chinese (Mandarin) - zh-CN</option>
-                <option value="ja">Japanese - ja-JP</option>
-                <option value="ko">Korean - ko-KR</option>
-                <option value="hi">Hindi - hi-IN</option>
-                <option value="ar">Arabic - ar-AR</option>
-                <option value="tr">Turkish - tr-TR</option>
                 <option value="auto">Auto-Detect (auto)</option>
             </select>
         </div>
@@ -59,9 +46,9 @@
 
         <div>
             <p>
-                <strong>Chunk Size:</strong> 160 ms | 
+                <strong>Chunk Size:</strong> 80 ms | 
                 <strong>Sample Rate:</strong> 16,000 Hz | 
-                <strong>Samples / Chunk:</strong> 2,560 | 
+                <strong>Samples / Chunk:</strong> 1,280 | 
                 <strong>Active Language:</strong> <span id="activeLangDisplay">lug</span>
             </p>
         </div>
@@ -105,7 +92,7 @@
         let audioBufferQueue = [];
 
         const TARGET_SR = 16000;
-        const CHUNK_SAMPLES = 2560; // 160ms at 16kHz
+        const CHUNK_SAMPLES = 1280; // 80ms at 16kHz (right-context = 0)
 
         function connectWebSocket() {
             const isLocal = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
@@ -199,7 +186,7 @@
                 audioBufferQueue.push(resampled[i]);
             }
 
-            // Slice out exact 160ms chunks (2560 samples = 5120 bytes)
+            // Slice out exact 80ms chunks (1280 samples = 2560 bytes)
             while (audioBufferQueue.length >= CHUNK_SAMPLES) {
                 const slice = audioBufferQueue.splice(0, CHUNK_SAMPLES);
                 const pcm16 = new Int16Array(CHUNK_SAMPLES);

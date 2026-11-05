@@ -92,7 +92,7 @@ def run_streaming_iteration(pcm16, audio_duration, tcp_rtt_ms, run_index):
     ready_msg = ws.recv()
     ready_ttfb_ms = (time.perf_counter() - t0) * 1000
 
-    chunk_samples = 2560
+    chunk_samples = 1280  # 80ms @ 16kHz (right-context = 0)
     chunk_bytes = chunk_samples * 2
     chunks = [pcm16[i:i + chunk_bytes] for i in range(0, len(pcm16), chunk_bytes)]
 
@@ -105,7 +105,7 @@ def run_streaming_iteration(pcm16, audio_duration, tcp_rtt_ms, run_index):
         ws.send_binary(chunk)
         chunk_num = idx + 1
 
-        deadline = t_chunk_send + 0.160
+        deadline = t_chunk_send + 0.080
         while time.perf_counter() < deadline:
             timeout_remain = max(0.005, deadline - time.perf_counter())
             ws.settimeout(timeout_remain)

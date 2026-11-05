@@ -75,25 +75,16 @@ struct HealthResponse {
 }
 
 async fn health_check() -> impl warp::Reply {
+    let model = std::env::var("MODEL_ID")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "phosai/elgon-streaming-v1".to_string());
     warp::reply::json(&HealthResponse {
         status: "healthy".to_string(),
-        model: "phosai-streaming-voice-v1".to_string(),
+        model,
         supported_languages: vec![
-            "en (English US)".to_string(),
-            "en-gb (English Commonwealth)".to_string(),
-            "es (Spanish)".to_string(),
-            "fr (French)".to_string(),
-            "de (German)".to_string(),
-            "it (Italian)".to_string(),
-            "pt (Portuguese)".to_string(),
-            "ru (Russian)".to_string(),
-            "zh (Chinese)".to_string(),
-            "ja (Japanese)".to_string(),
-            "ko (Korean)".to_string(),
-            "hi (Hindi)".to_string(),
-            "ar (Arabic)".to_string(),
-            "tr (Turkish)".to_string(),
-            "sw (Swahili)".to_string(),
+            "en (English)".to_string(),
+            "lug (Luganda)".to_string(),
             "auto (Auto-detect)".to_string(),
         ],
     })
@@ -627,13 +618,13 @@ pub async fn run_server(service: Arc<NemotronService>, port: u16) {
                     "/v1/realtime": {
                         "get": {
                             "summary": "Real-time Streaming WebSocket",
-                            "description": "Bidirectional WebSocket connection for live 160ms cache-aware streaming. Connect with query param e.g. ws://localhost:8099/v1/realtime?language=en. Supported messages: direct raw 16-bit PCM binary streaming or JSON 'audio' (base64 PCM), 'partial' (delta text), 'final' (completed utterance), 'reset', 'flush'.",
+                            "description": "Bidirectional WebSocket connection for live 80ms (right-context 0) cache-aware streaming. Connect with query param e.g. ws://localhost:8099/v1/realtime?language=en. Supported messages: direct raw 16-bit PCM binary streaming or JSON 'audio' (base64 PCM), 'partial' (delta text), 'final' (completed utterance), 'reset', 'flush'.",
                             "parameters": [
                                 {
                                     "name": "language",
                                     "in": "query",
                                     "required": false,
-                                    "description": "Target language: 'en', 'es', 'fr', 'sw', or 'auto'",
+                                    "description": "Target language: 'en', 'lug', or 'auto'",
                                     "schema": { "type": "string", "default": "auto" }
                                 },
                                 {
@@ -743,11 +734,16 @@ pub async fn run_server(service: Arc<NemotronService>, port: u16) {
         .with(cors)
         .with(warp::log("api"));
 
+    let model_id = std::env::var("MODEL_ID")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| "phosai/elgon-streaming-v1".to_string());
+
     println!("============================================================");
-    println!(" NVIDIA Nemotron 3.5 Streaming ASR Service running on port {port}");
-    println!(" Engine: parakeet-rs | FastConformer Native Transducer");
-    println!(" Languages: Multilingual (en, es, fr, de, it, pt, ru, zh, ja, ko, hi, ar, tr, sw, auto)");
-    println!(" Model: nvidia/nemotron-3.5-asr-streaming-0.6b");
+    println!(" PhosAI Elgon Streaming ASR Service running on port {port}");
+    println!(" Engine: LibTorch (tch-rs) | FastConformer RNN-Transducer (80ms lookahead / right-context = 0)");
+    println!(" Languages: English (en, eng, en-UG, eng-UG) & Luganda (lug, lg, lug-UG)");
+    println!(" Model: {model_id}");
     println!("------------------------------------------------------------");
     println!(" [WebSocket Streaming]  ws://localhost:{port}/v1/realtime");
     println!(" [Single Transcribe]    POST http://localhost:{port}/v1/transcribe");

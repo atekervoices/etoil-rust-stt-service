@@ -5,6 +5,8 @@ services:
       dockerfile: Dockerfile
       args:
         - HF_TOKEN=${HF_TOKEN}
+        - MODEL_ID=${MODEL_ID:-phosai/elgon-streaming-v1}
+        - LOOKAHEAD_TOKENS=${LOOKAHEAD_TOKENS:-0}
     container_name: nemotron-stt-service
     ports:
       - "8099:8099"
@@ -23,6 +25,7 @@ services:
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=compute,utility
       - RUST_LOG=info
+      - MODEL_ID=${MODEL_ID:-phosai/elgon-streaming-v1}
       - MODEL_PATH=/app/torchscript_model
       - PORT=8099
       - TORCH_CPP_LOG_LEVEL=ERROR
@@ -43,6 +46,8 @@ services:
       dockerfile: Dockerfile.cpu
       args:
         - HF_TOKEN=${HF_TOKEN}
+        - MODEL_ID=${MODEL_ID:-phosai/elgon-streaming-v1}
+        - LOOKAHEAD_TOKENS=${LOOKAHEAD_TOKENS:-0}
     container_name: nemotron-stt-service-cpu
     ports:
       - "8099:8099"
@@ -50,6 +55,7 @@ services:
       - ./audio:/app/audio:ro
     environment:
       - RUST_LOG=info
+      - MODEL_ID=${MODEL_ID:-phosai/elgon-streaming-v1}
       - MODEL_PATH=/app/torchscript_model
       - PORT=8099
     restart: unless-stopped

@@ -39,6 +39,7 @@ impl NemotronTorchModel {
         let joint_path = dir.join("joint.pt");
         let tok_path = dir.join("tokenizer.json");
         let prompt_dict_path = dir.join("prompt_dictionary.json");
+        let config_path = dir.join("config.json");
 
         println!("Loading TorchScript models from {} onto {:?}...", dir.display(), device);
         let mut encoder = CModule::load_on_device(&enc_path, device)
@@ -64,8 +65,22 @@ impl NemotronTorchModel {
             HashMap::new()
         };
 
-        // Blank token is 13087 for Nemotron 3.5 RNN-T
-        let blank_id = 13087;
+        // Read blank_token_id from config.json if available (e.g., 2048 for phosai/elgon-streaming-v1, or 13087 for base Nemotron)
+        let config_blank_id: Option<i64> = if config_path.exists() {
+            File::open(&config_path)
+                .ok()
+                .and_then(|f| serde_json::from_reader::<_, serde_json::Value>(BufReader::new(f)).ok())
+                .and_then(|v| {
+                    v.get("blank_token_id")
+                        .and_then(|b| b.as_i64())
+                        .or_else(|| v.get("blank_id").and_then(|b| b.as_i64()))
+                        .or_else(|| v.get("vocab_size").and_then(|b| b.as_i64()))
+                })
+        } else {
+            None
+        };
+
+        let blank_id = config_blank_id.unwrap_or_else(|| tokenizer.get_vocab_size(true) as i64);
         // Default prompt id is 63 for Luganda
         let default_prompt_id = *prompt_dictionary.get("lug").unwrap_or(&63);
 
@@ -89,15 +104,48 @@ impl NemotronTorchModel {
 
     /// Resolve language code to model prompt ID
     pub fn resolve_prompt_id(&self, lang: &str) -> i64 {
-        let normalized = lang.trim().to_lowercase();
+        let trimmed = lang.trim();
+        if let Some(&id) = self.prompt_dictionary.get(trimmed) {
+            return id;
+        }
+        let normalized = trimmed.to_lowercase().replace('_', "-");
         if let Some(&id) = self.prompt_dictionary.get(&normalized) {
             return id;
         }
         match normalized.as_str() {
-            "lug" | "luganda" | "ganda" | "lg" | "lug-ug" | "lug_ug" => 63,
-            "en" | "eng" | "english" | "en-us" | "en_us" => 0,
-            "sw" | "swa" | "swahili" | "sw-ke" => 48,
-            "auto" | "" | "default" => 101,
+            "lug" | "luganda" | "ganda" | "oluganda" | "lg" | "lug-ug" | "lg-ug" => *self
+                .prompt_dictionary
+                .get("lug")
+                .or_else(|| self.prompt_dictionary.get("lug-UG"))
+                .unwrap_or(&63),
+            "en" | "eng" | "english" | "en-us" | "eng-us" | "en-ug" | "eng-ug"
+            | "ugandan-english" | "us" | "american" => *self
+                .prompt_dictionary
+                .get("en-US")
+                .or_else(|| self.prompt_dictionary.get("en"))
+                .unwrap_or(&0),
+            "en-gb" | "eng-gb" | "british" | "commonwealth" => *self
+                .prompt_dictionary
+                .get("en-GB")
+                .or_else(|| self.prompt_dictionary.get("en-US"))
+                .or_else(|| self.prompt_dictionary.get("en"))
+                .unwrap_or(&1),
+            "sw" | "swa" | "swahili" | "sw-ke" => *self
+                .prompt_dictionary
+                .get("sw-KE")
+                .or_else(|| self.prompt_dictionary.get("sw"))
+                .unwrap_or(&48),
+            "auto" | "" | "default" => *self.prompt_dictionary.get("auto").unwrap_or(&101),
+            other if other.starts_with("en-") || other.starts_with("eng-") => *self
+                .prompt_dictionary
+                .get("en-US")
+                .or_else(|| self.prompt_dictionary.get("en"))
+                .unwrap_or(&0),
+            other if other.starts_with("lug-") || other.starts_with("lg-") => *self
+                .prompt_dictionary
+                .get("lug")
+                .or_else(|| self.prompt_dictionary.get("lug-UG"))
+                .unwrap_or(&63),
             _ => self.default_prompt_id,
         }
     }

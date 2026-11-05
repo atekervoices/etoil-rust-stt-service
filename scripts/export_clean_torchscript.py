@@ -7,7 +7,12 @@ from transformers import AutoProcessor, AutoModelForRNNT
 
 raw_token = os.environ.get("HF_TOKEN", "").strip()
 hf_token = raw_token if raw_token else None
-model_id = "phosai/nemotron-3.5-asr-streaming-luganda"
+model_id = os.environ.get("MODEL_ID", "").strip()
+if not model_id:
+    raise ValueError(
+        "MODEL_ID environment variable is required. Pass it via docker-compose.yml (MODEL_ID) or --build-arg MODEL_ID=..."
+    )
+lookahead_tokens = int(os.environ.get("LOOKAHEAD_TOKENS", "0").strip() or "0")
 output_dir = os.environ.get("OUTPUT_DIR", "/export/torchscript_model")
 os.makedirs(output_dir, exist_ok=True)
 
@@ -21,24 +26,44 @@ processor = AutoProcessor.from_pretrained(model_id, token=hf_token)
 model = AutoModelForRNNT.from_pretrained(model_id, token=hf_token).eval()
 fe = processor.feature_extractor
 
-# 1. Save tokenizer & prompt dictionary
+# 1. Save tokenizer, model config & prompt dictionary
 processor.save_pretrained(output_dir)
+model.config.save_pretrained(output_dir)
+
+prompt_dict = getattr(processor, "prompt_dictionary", {"lug": 63, "en": 0, "en-US": 0})
 with open(os.path.join(output_dir, "prompt_dictionary.json"), "w") as f:
-    json.dump(processor.prompt_dictionary, f, indent=2)
-print("Saved tokenizer and prompt_dictionary.json")
+    json.dump(prompt_dict, f, indent=2)
+
+blank_id = int(getattr(model.config, "blank_token_id", getattr(model.config, "vocab_size", 2048)))
+dec_hidden = int(getattr(model.decoder.lstm, "hidden_size", 640))
+dec_layers = int(getattr(model.decoder.lstm, "num_layers", 2))
+print(f"Saved tokenizer, config.json, and prompt_dictionary.json (blank_id={blank_id}, dec_layers={dec_layers}, dec_hidden={dec_hidden})")
 
 LOG_ZERO_GUARD_VALUE = 5.960464477539063e-08
 
 # 2. End-to-End Encoder Wrapper taking raw 16kHz audio waveform [1, N]
 class EndToEndEncoderWrapper(nn.Module):
-    def __init__(self, m, fe):
+    def __init__(self, m, fe, num_lookahead_tokens: int = 0):
         super().__init__()
         self.encoder = m.encoder
         self.prompt_projector = m.prompt_projector
         self.encoder_projector = m.encoder_projector
         self.num_prompts = m.config.num_prompts
-        self.chunk_size = 4
-        self.left_context_chunks = 14
+
+        # 80ms lookahead when num_lookahead_tokens = 0 (right_context = 0)
+        # 1 subsampled encoder frame = 80ms (1280 audio samples @ 16kHz)
+        if hasattr(m.encoder, "_resolve_attn_context"):
+            left_ctx, right_ctx = m.encoder._resolve_attn_context(num_lookahead_tokens)
+        else:
+            left_ctx, right_ctx = 56, num_lookahead_tokens
+        self.chunk_size = right_ctx + 1
+        self.left_context_chunks = left_ctx // self.chunk_size if left_ctx >= 0 else 10_000
+        lookahead_ms = self.chunk_size * 80
+        print(
+            f"Configured streaming lookahead: {lookahead_ms}ms (num_lookahead_tokens={num_lookahead_tokens}, "
+            f"left_ctx={left_ctx}, right_ctx={right_ctx}, chunk_size={self.chunk_size}, "
+            f"left_context_chunks={self.left_context_chunks})"
+        )
 
         # Mel extraction parameters
         self.win_length = fe.win_length
@@ -168,7 +193,7 @@ prompts = torch.tensor([63], dtype=torch.long)
 
 with torch.inference_mode():
     print("Tracing EndToEndEncoderWrapper...")
-    e2e_enc = EndToEndEncoderWrapper(model, fe).eval()
+    e2e_enc = EndToEndEncoderWrapper(model, fe, num_lookahead_tokens=lookahead_tokens).eval()
     traced_enc = torch.jit.trace(e2e_enc, (raw_waveform, prompts))
     enc_path = os.path.join(output_dir, "encoder.pt")
     traced_enc.save(enc_path)
@@ -176,9 +201,9 @@ with torch.inference_mode():
 
     print("Tracing DecoderWrapper...")
     dec_wrap = DecoderWrapper(model).eval()
-    dummy_input_ids = torch.tensor([[13087]], dtype=torch.long)
-    dummy_h = torch.zeros(2, 1, 640)
-    dummy_c = torch.zeros(2, 1, 640)
+    dummy_input_ids = torch.tensor([[blank_id]], dtype=torch.long)
+    dummy_h = torch.zeros(dec_layers, 1, dec_hidden)
+    dummy_c = torch.zeros(dec_layers, 1, dec_hidden)
     traced_dec = torch.jit.trace(dec_wrap, (dummy_input_ids, dummy_h, dummy_c))
     dec_path = os.path.join(output_dir, "decoder.pt")
     traced_dec.save(dec_path)
@@ -186,8 +211,8 @@ with torch.inference_mode():
 
     print("Tracing JointWrapper...")
     joint_wrap = JointWrapper(model).eval()
-    dummy_dec_out = torch.randn(1, 1, 640)
-    dummy_frame = torch.randn(1, 1, 640)
+    dummy_dec_out = torch.randn(1, 1, dec_hidden)
+    dummy_frame = torch.randn(1, 1, dec_hidden)
     traced_joint = torch.jit.trace(joint_wrap, (dummy_dec_out, dummy_frame))
     joint_path = os.path.join(output_dir, "joint.pt")
     traced_joint.save(joint_path)
