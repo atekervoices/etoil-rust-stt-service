@@ -102,40 +102,31 @@ impl NemotronTorchModel {
         self.device
     }
 
-    /// Resolve language code to model prompt ID
+    /// Resolve language code to model prompt ID.
+    /// Note: phosai/elgon-streaming-v1 is trained specifically on English (prompt 0) and Luganda (prompt 63).
+    /// We match explicit English/Luganda/auto tags first so "auto" never maps to untrained prompt 101.
     pub fn resolve_prompt_id(&self, lang: &str) -> i64 {
         let trimmed = lang.trim();
-        if let Some(&id) = self.prompt_dictionary.get(trimmed) {
-            return id;
-        }
         let normalized = trimmed.to_lowercase().replace('_', "-");
-        if let Some(&id) = self.prompt_dictionary.get(&normalized) {
-            return id;
-        }
+
         match normalized.as_str() {
             "lug" | "luganda" | "ganda" | "oluganda" | "lg" | "lug-ug" | "lg-ug" => *self
                 .prompt_dictionary
                 .get("lug")
                 .or_else(|| self.prompt_dictionary.get("lug-UG"))
                 .unwrap_or(&63),
-            "en" | "eng" | "english" | "en-us" | "eng-us" | "en-ug" | "eng-ug"
-            | "ugandan-english" | "us" | "american" => *self
+            "en" | "eng" | "english" | "en-us" | "eng-us" | "en-ug" | "eng-ug" | "en-gb"
+            | "eng-gb" | "ugandan-english" | "us" | "american" | "british" | "commonwealth" => *self
                 .prompt_dictionary
                 .get("en-US")
                 .or_else(|| self.prompt_dictionary.get("en"))
                 .unwrap_or(&0),
-            "en-gb" | "eng-gb" | "british" | "commonwealth" => *self
+            // Map "auto" to English (0) rather than untrained prompt ID 101
+            "auto" | "" | "default" => *self
                 .prompt_dictionary
-                .get("en-GB")
-                .or_else(|| self.prompt_dictionary.get("en-US"))
+                .get("en-US")
                 .or_else(|| self.prompt_dictionary.get("en"))
-                .unwrap_or(&1),
-            "sw" | "swa" | "swahili" | "sw-ke" => *self
-                .prompt_dictionary
-                .get("sw-KE")
-                .or_else(|| self.prompt_dictionary.get("sw"))
-                .unwrap_or(&48),
-            "auto" | "" | "default" => *self.prompt_dictionary.get("auto").unwrap_or(&101),
+                .unwrap_or(&0),
             other if other.starts_with("en-") || other.starts_with("eng-") => *self
                 .prompt_dictionary
                 .get("en-US")
@@ -146,7 +137,15 @@ impl NemotronTorchModel {
                 .get("lug")
                 .or_else(|| self.prompt_dictionary.get("lug-UG"))
                 .unwrap_or(&63),
-            _ => self.default_prompt_id,
+            _ => {
+                if let Some(&id) = self.prompt_dictionary.get(trimmed) {
+                    return id;
+                }
+                if let Some(&id) = self.prompt_dictionary.get(&normalized) {
+                    return id;
+                }
+                self.default_prompt_id
+            }
         }
     }
 
@@ -226,7 +225,8 @@ impl NemotronTorchModel {
 
         for t in 0..num_frames {
             let frame = enc_out.slice(1, t, t + 1, 1); // [1, 1, 640]
-            for _ in 0..10 {
+            let mut prev_token_in_frame: Option<i64> = None;
+            for _ in 0..6 {
                 let logits = self.joint.forward_ts(&[&dec_out, &frame])?; // [1, Vocab]
                 let token = logits.argmax(-1, false).int64_value(&[]);
 
@@ -235,7 +235,21 @@ impl NemotronTorchModel {
                     break;
                 }
 
+                // Prevent single-frame RNN-T repetition loops (e.g. emitting the same token twice on one 80ms frame)
+                if prev_token_in_frame == Some(token) {
+                    break;
+                }
+
+                // Prevent multi-frame stutter loops (never emit the exact same subword token >2 times consecutively)
+                if emitted_tokens.len() >= 2
+                    && emitted_tokens[emitted_tokens.len() - 1] == token as u32
+                    && emitted_tokens[emitted_tokens.len() - 2] == token as u32
+                {
+                    break;
+                }
+
                 // Non-blank emitted -> record token and advance decoder LSTM
+                prev_token_in_frame = Some(token);
                 emitted_tokens.push(token as u32);
                 last_token = Tensor::from_slice(&[token])
                     .unsqueeze(0)

@@ -151,6 +151,10 @@
         }
 
         langSelect.addEventListener('change', () => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({ type: 'reset', finalize: true }));
+            }
+            partialText.textContent = '';
             sendConfig();
         });
 

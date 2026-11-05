@@ -12,7 +12,7 @@ if not model_id:
     raise ValueError(
         "MODEL_ID environment variable is required. Pass it via docker-compose.yml (MODEL_ID) or --build-arg MODEL_ID=..."
     )
-lookahead_tokens = int(os.environ.get("LOOKAHEAD_TOKENS", "0").strip() or "0")
+lookahead_tokens = int(os.environ.get("LOOKAHEAD_TOKENS", "3").strip() or "3")
 output_dir = os.environ.get("OUTPUT_DIR", "/export/torchscript_model")
 os.makedirs(output_dir, exist_ok=True)
 
@@ -43,15 +43,14 @@ LOG_ZERO_GUARD_VALUE = 5.960464477539063e-08
 
 # 2. End-to-End Encoder Wrapper taking raw 16kHz audio waveform [1, N]
 class EndToEndEncoderWrapper(nn.Module):
-    def __init__(self, m, fe, num_lookahead_tokens: int = 0):
+    def __init__(self, m, fe, num_lookahead_tokens: int = 3):
         super().__init__()
         self.encoder = m.encoder
         self.prompt_projector = m.prompt_projector
         self.encoder_projector = m.encoder_projector
         self.num_prompts = m.config.num_prompts
 
-        # 80ms lookahead when num_lookahead_tokens = 0 (right_context = 0)
-        # 1 subsampled encoder frame = 80ms (1280 audio samples @ 16kHz)
+        # Default num_lookahead_tokens = 3 (320ms chunk attention, matching training)
         if hasattr(m.encoder, "_resolve_attn_context"):
             left_ctx, right_ctx = m.encoder._resolve_attn_context(num_lookahead_tokens)
         else:

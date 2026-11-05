@@ -129,7 +129,7 @@ impl WebSocketHandler {
         let mut last_inference_time = std::time::Instant::now();
         let start_time = std::time::Instant::now();
         let mut sample_rate: u32 = 16000;
-        let mut silent_chunks: usize = 0;
+        let mut silent_samples: usize = 0;
         let mut speech_detected: bool = false;
 
         while let Some(msg) = ws_rx.next().await {
@@ -171,6 +171,10 @@ impl WebSocketHandler {
 
                                 match SupportedLanguage::parse(&lang_str) {
                                     Ok(lang) => {
+                                        if active_language != lang {
+                                            last_emitted_text.clear();
+                                            last_emitted_final.clear();
+                                        }
                                         active_language = lang;
                                         println!(
                                             "WebSocket: Configured language '{}' (target: '{}')",
@@ -211,7 +215,7 @@ impl WebSocketHandler {
                                 last_emitted_text.clear();
                                 last_emitted_final.clear();
                                 speech_detected = false;
-                                silent_chunks = 0;
+                                silent_samples = 0;
                                 println!("WebSocket: Session reset by client request");
                             }
 
@@ -250,7 +254,7 @@ impl WebSocketHandler {
                                 audio_buffer.clear();
                                 last_emitted_text.clear();
                                 speech_detected = false;
-                                silent_chunks = 0;
+                                silent_samples = 0;
                             }
 
                             _ => {}
@@ -273,16 +277,25 @@ impl WebSocketHandler {
                         // Sensitive threshold (0.002) so quiet laptop mics are detected reliably
                         if rms >= 0.002 {
                             speech_detected = true;
-                            silent_chunks = 0;
+                            silent_samples = 0;
                         } else if speech_detected {
-                            silent_chunks += 1;
+                            silent_samples += new_audio_samples.len();
                         }
 
-                        // Sentence pause detection: ~0.8s (10 chunks of 80ms) of silence OR continuous speech ceiling (4.5s)
-                        let max_buffer_exceeded = audio_buffer.len() >= (sample_rate as usize * 45 / 10); // 4.5 seconds
-                        let pause_detected = speech_detected && silent_chunks >= 10 && audio_buffer.len() >= 4800;
+                        // Sentence pause detection:
+                        // 1. Standard pause: ~0.75s of silence after speech (>= 0.5s total audio)
+                        // 2. Micro-pause on long continuous speech: ~0.24s of silence when buffer >= 9s
+                        // 3. Hard ceiling: 16s of continuous uninterrupted speech
+                        let sr_usize = sample_rate as usize;
+                        let standard_pause = speech_detected
+                            && silent_samples >= (sr_usize * 75 / 100)
+                            && audio_buffer.len() >= (sr_usize / 2);
+                        let long_speech_micro_pause = speech_detected
+                            && audio_buffer.len() >= (sr_usize * 9)
+                            && silent_samples >= (sr_usize * 24 / 100);
+                        let max_buffer_exceeded = audio_buffer.len() >= (sr_usize * 16);
 
-                        if pause_detected || max_buffer_exceeded {
+                        if standard_pause || long_speech_micro_pause || max_buffer_exceeded {
                             let model = self.service.model.clone();
                             let buf_clone = audio_buffer.clone();
                             let lang_target = active_language.to_nemotron_lang().to_string();
@@ -305,24 +318,15 @@ impl WebSocketHandler {
                                 }
                             }
 
-                            if max_buffer_exceeded && !pause_detected {
-                                // Continuous speech (e.g. fast radio presenter): retain ~0.64s overlap context
-                                let overlap = (sample_rate as usize * 64 / 100).min(audio_buffer.len());
-                                let start_idx = audio_buffer.len() - overlap;
-                                audio_buffer = audio_buffer[start_idx..].to_vec();
-                                speech_detected = true;
-                                silent_chunks = 0;
-                            } else {
-                                audio_buffer.clear();
-                                speech_detected = false;
-                                silent_chunks = 0;
-                            }
-
+                            // Clear buffer cleanly without overlapping already-emitted audio (prevents duplicate words)
+                            audio_buffer.clear();
+                            speech_detected = false;
+                            silent_samples = 0;
                             last_emitted_text.clear();
                             last_inference_time = std::time::Instant::now();
                         }
-                        // Streaming partial transcription update with 80ms lookahead (1280 samples @ 16kHz)
-                        else if speech_detected && audio_buffer.len() >= 1280 && last_inference_time.elapsed().as_millis() >= 80 {
+                        // Streaming partial transcription update every ~240ms while speech is ongoing
+                        else if speech_detected && audio_buffer.len() >= 2560 && last_inference_time.elapsed().as_millis() >= 240 {
                             last_inference_time = std::time::Instant::now();
                             let model = self.service.model.clone();
                             let buf_clone = audio_buffer.clone();

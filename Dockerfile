@@ -25,7 +25,7 @@ RUN pip install --no-cache-dir transformers soundfile huggingface_hub librosa sc
 
 ARG HF_TOKEN=""
 ARG MODEL_ID=""
-ARG LOOKAHEAD_TOKENS="0"
+ARG LOOKAHEAD_TOKENS="3"
 ENV HF_TOKEN=${HF_TOKEN}
 ENV MODEL_ID=${MODEL_ID}
 ENV LOOKAHEAD_TOKENS=${LOOKAHEAD_TOKENS}

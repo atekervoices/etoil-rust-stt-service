@@ -6,7 +6,7 @@ services:
       args:
         - HF_TOKEN=${HF_TOKEN}
         - MODEL_ID=${MODEL_ID:-phosai/elgon-streaming-v1}
-        - LOOKAHEAD_TOKENS=${LOOKAHEAD_TOKENS:-0}
+        - LOOKAHEAD_TOKENS=${LOOKAHEAD_TOKENS:-3}
     container_name: nemotron-stt-service
     ports:
       - "8099:8099"
@@ -47,7 +47,7 @@ services:
       args:
         - HF_TOKEN=${HF_TOKEN}
         - MODEL_ID=${MODEL_ID:-phosai/elgon-streaming-v1}
-        - LOOKAHEAD_TOKENS=${LOOKAHEAD_TOKENS:-0}
+        - LOOKAHEAD_TOKENS=${LOOKAHEAD_TOKENS:-3}
     container_name: nemotron-stt-service-cpu
     ports:
       - "8099:8099"
