@@ -69,6 +69,9 @@ RUN mkdir -p /usr/local/libtorch && \
 ENV LIBTORCH=/usr/local/libtorch
 ENV LD_LIBRARY_PATH=/usr/local/libtorch/lib:${LD_LIBRARY_PATH}
 
+# Upgrade rustc to latest stable (>= 1.87 required by earshot) while keeping the LibTorch layer cached
+RUN rustup update stable && rustup default stable
+
 WORKDIR /app
 
 COPY Cargo.toml Cargo.lock ./
