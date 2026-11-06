@@ -190,26 +190,11 @@ impl NemotronTorchModel {
         }
 
         // 1. Ensure 16kHz sample rate
-        let mut audio_16k = Self::resample_to_16k(raw_audio, orig_sr)?;
-
-        // 2. Peak-normalize quiet microphone streams to match training waveform distribution (max_amp ~ 0.5-0.95)
-        // NemotronAsrStreamingFeatureExtractor computes un-normalized log-mel spectrograms, so quiet mic audio
-        // (e.g. max_amp 0.05-0.20) shifts log-mel energies down by 15-20 dB compared to recorded WAV files.
-        let max_amp = audio_16k.iter().copied().fold(0.0f32, |m, s| m.max(s.abs()));
-        if max_amp >= 0.006 && max_amp < 0.55 {
-            let gain = (0.75 / max_amp).min(8.0);
-            for s in &mut audio_16k {
-                *s = (*s * gain).clamp(-1.0, 1.0);
-            }
-        }
-
-        // 3. Append 320ms (5,120 samples = 4 encoder frames = 1 full lookahead chunk) of trailing silence
-        // so the final speech frames in streaming buffers receive full right-context lookahead and conv tail.
-        audio_16k.resize(audio_16k.len() + 5120, 0.0);
+        let audio_16k = Self::resample_to_16k(raw_audio, orig_sr)?;
 
         let _guard = tch::no_grad_guard();
 
-        // 4. Prepare raw audio waveform tensor: shape [1, N] on target device
+        // 2. Prepare raw audio waveform tensor: shape [1, N] on target device
         let wav_tensor = Tensor::from_slice(&audio_16k)
             .unsqueeze(0)
             .to_kind(Kind::Float)
@@ -219,11 +204,11 @@ impl NemotronTorchModel {
             .to_kind(Kind::Int64)
             .to_device(self.device);
 
-        // 5. Run End-to-End Encoder: waveform [1, N] -> audio features [1, T, 640]
+        // 3. Run End-to-End Encoder: waveform [1, N] -> audio features [1, T, 640]
         let enc_out = self.encoder.forward_ts(&[wav_tensor, prompt_tensor])?;
         let num_frames = enc_out.size()[1];
 
-        // 6. Initialize Decoder LSTM states (2 layers, hidden size 640) on target device
+        // 4. Initialize Decoder LSTM states (2 layers, hidden size 640) on target device
         let mut h = Tensor::zeros([2, 1, 640], (Kind::Float, self.device));
         let mut c = Tensor::zeros([2, 1, 640], (Kind::Float, self.device));
         let mut last_token = Tensor::from_slice(&[self.blank_id])
@@ -235,11 +220,12 @@ impl NemotronTorchModel {
         h = new_h;
         c = new_c;
 
-        // 7. RNN-T Greedy Decoding Loop
+        // 5. RNN-T Greedy Decoding Loop
         let mut emitted_tokens: Vec<u32> = Vec::new();
 
         for t in 0..num_frames {
             let frame = enc_out.slice(1, t, t + 1, 1); // [1, 1, 640]
+            let mut prev_token_in_frame: Option<i64> = None;
             for _ in 0..6 {
                 let logits = self.joint.forward_ts(&[&dec_out, &frame])?; // [1, Vocab]
                 let token = logits.argmax(-1, false).int64_value(&[]);
@@ -249,7 +235,12 @@ impl NemotronTorchModel {
                     break;
                 }
 
-                // Prevent multi-token RNN-T repetition loops (never emit the exact same subword token >2 times consecutively)
+                // Prevent single-frame RNN-T repetition loops (e.g. emitting the same BPE syllable twice on one 80ms frame)
+                if prev_token_in_frame == Some(token) {
+                    break;
+                }
+
+                // Prevent multi-frame stutter loops (never emit the exact same subword token >2 times consecutively)
                 if emitted_tokens.len() >= 2
                     && emitted_tokens[emitted_tokens.len() - 1] == token as u32
                     && emitted_tokens[emitted_tokens.len() - 2] == token as u32
@@ -258,6 +249,7 @@ impl NemotronTorchModel {
                 }
 
                 // Non-blank emitted -> record token and advance decoder LSTM
+                prev_token_in_frame = Some(token);
                 emitted_tokens.push(token as u32);
                 last_token = Tensor::from_slice(&[token])
                     .unsqueeze(0)

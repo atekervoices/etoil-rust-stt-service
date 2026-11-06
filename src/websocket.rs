@@ -124,7 +124,6 @@ impl WebSocketHandler {
 
         // Connection state
         let mut audio_buffer: Vec<f32> = Vec::with_capacity(16000 * 30);
-        let mut pre_speech_buffer: Vec<f32> = Vec::with_capacity(16000);
         let mut last_emitted_text = String::new();
         let mut last_emitted_final = String::new();
         let mut last_inference_time = std::time::Instant::now();
@@ -132,8 +131,6 @@ impl WebSocketHandler {
         let mut sample_rate: u32 = 16000;
         let mut silent_samples: usize = 0;
         let mut speech_detected: bool = false;
-        let mut noise_floor_rms: f32 = 0.004;
-        let mut speech_peak_rms: f32 = 0.03;
 
         while let Some(msg) = ws_rx.next().await {
             let mut new_audio_samples: Vec<f32> = Vec::new();
@@ -215,13 +212,10 @@ impl WebSocketHandler {
                                         .await;
                                 }
                                 audio_buffer.clear();
-                                pre_speech_buffer.clear();
                                 last_emitted_text.clear();
                                 last_emitted_final.clear();
                                 speech_detected = false;
                                 silent_samples = 0;
-                                noise_floor_rms = 0.004;
-                                speech_peak_rms = 0.03;
                                 println!("WebSocket: Session reset by client request");
                             }
 
@@ -258,7 +252,6 @@ impl WebSocketHandler {
                                     }
                                 }
                                 audio_buffer.clear();
-                                pre_speech_buffer.clear();
                                 last_emitted_text.clear();
                                 speech_detected = false;
                                 silent_samples = 0;
@@ -268,7 +261,17 @@ impl WebSocketHandler {
                         }
                     } else if message.is_binary() {
                         let audio_bytes = message.as_bytes();
-                        for chunk in audio_bytes.chunks_exact(2) {
+                        // If a WAV container header is sent over WebSocket, parse header sample_rate and skip 44-byte RIFF header
+                        let pcm_slice = if audio_bytes.starts_with(b"RIFF") && audio_bytes.len() > 44 {
+                            let wav_sr = u32::from_le_bytes([audio_bytes[24], audio_bytes[25], audio_bytes[26], audio_bytes[27]]);
+                            if (8000..=96000).contains(&wav_sr) {
+                                sample_rate = wav_sr;
+                            }
+                            &audio_bytes[44..]
+                        } else {
+                            audio_bytes
+                        };
+                        for chunk in pcm_slice.chunks_exact(2) {
                             let sample = i16::from_le_bytes([chunk[0], chunk[1]]) as f32 / 32768.0;
                             new_audio_samples.push(sample);
                         }
@@ -280,51 +283,35 @@ impl WebSocketHandler {
                     if !new_audio_samples.is_empty() {
                         let rms = (new_audio_samples.iter().map(|&s| s * s).sum::<f32>() / new_audio_samples.len().max(1) as f32).sqrt();
                         let sr_usize = sample_rate as usize;
-                        let pre_roll_max = (sr_usize * 3) / 10; // 300ms pre-speech rollback buffer
+                        audio_buffer.extend(&new_audio_samples);
 
-                        if !speech_detected {
-                            let onset_thresh = (noise_floor_rms * 2.5).clamp(0.008, 0.035);
-                            if rms >= onset_thresh {
-                                speech_detected = true;
-                                silent_samples = 0;
-                                speech_peak_rms = rms.max(0.02);
-                                audio_buffer.extend_from_slice(&pre_speech_buffer);
-                                pre_speech_buffer.clear();
-                                audio_buffer.extend_from_slice(&new_audio_samples);
-                            } else {
-                                noise_floor_rms = (0.92 * noise_floor_rms + 0.08 * rms).clamp(0.002, 0.020);
-                                pre_speech_buffer.extend_from_slice(&new_audio_samples);
-                                if pre_speech_buffer.len() > pre_roll_max {
-                                    let excess = pre_speech_buffer.len() - pre_roll_max;
-                                    pre_speech_buffer.drain(0..excess);
-                                }
-                            }
+                        // Sensitive threshold (0.002) so quiet speech syllables (e.g. 0.0035 RMS) are always captured
+                        if rms >= 0.002 {
+                            speech_detected = true;
+                            silent_samples = 0;
+                        } else if speech_detected {
+                            silent_samples += new_audio_samples.len();
                         } else {
-                            audio_buffer.extend_from_slice(&new_audio_samples);
-                            let silence_thresh = (noise_floor_rms * 1.8)
-                                .max(speech_peak_rms * 0.22)
-                                .clamp(0.006, 0.030);
-
-                            if rms >= silence_thresh {
-                                silent_samples = 0;
-                                speech_peak_rms = (0.85 * speech_peak_rms + 0.15 * rms).clamp(0.015, 0.25);
-                            } else {
-                                silent_samples += new_audio_samples.len();
-                                noise_floor_rms = (0.97 * noise_floor_rms + 0.03 * rms).clamp(0.002, 0.020);
+                            // While waiting for speech onset, keep a rolling 0.64s pre-roll buffer
+                            // so idle room silence does not accumulate, without ever clipping word onsets
+                            let pre_roll_samples = (sr_usize * 64) / 100;
+                            if audio_buffer.len() > pre_roll_samples {
+                                let excess = audio_buffer.len() - pre_roll_samples;
+                                audio_buffer.drain(0..excess);
                             }
                         }
 
                         // Sentence pause detection:
-                        // 1. Standard pause: ~0.64s of silence after speech (>= 0.45s total audio)
-                        // 2. Micro-pause on long continuous speech: ~0.24s of silence when buffer >= 7s
-                        // 3. Hard ceiling: 14s of continuous uninterrupted speech
+                        // 1. Standard pause: ~1.10s of silence after speech (>= 0.6s total audio) so mid-sentence pauses aren't cut early
+                        // 2. Micro-pause on long continuous speech: ~0.48s of silence when buffer >= 12s
+                        // 3. Hard ceiling: 20s of continuous uninterrupted speech
                         let standard_pause = speech_detected
-                            && silent_samples >= (sr_usize * 64 / 100)
-                            && audio_buffer.len() >= (sr_usize * 45 / 100);
+                            && silent_samples >= (sr_usize * 110 / 100)
+                            && audio_buffer.len() >= (sr_usize * 60 / 100);
                         let long_speech_micro_pause = speech_detected
-                            && audio_buffer.len() >= (sr_usize * 7)
-                            && silent_samples >= (sr_usize * 24 / 100);
-                        let max_buffer_exceeded = speech_detected && audio_buffer.len() >= (sr_usize * 14);
+                            && audio_buffer.len() >= (sr_usize * 12)
+                            && silent_samples >= (sr_usize * 48 / 100);
+                        let max_buffer_exceeded = audio_buffer.len() >= (sr_usize * 20);
 
                         if standard_pause || long_speech_micro_pause || max_buffer_exceeded {
                             let model = self.service.model.clone();
@@ -349,16 +336,22 @@ impl WebSocketHandler {
                                 }
                             }
 
-                            // Clear buffer cleanly without overlapping already-emitted audio
-                            audio_buffer.clear();
-                            pre_speech_buffer.clear();
+                            // Keep the trailing 0.48s of the silent pause as pre-roll for the next sentence
+                            // so if the speaker begins a soft consonant ("Wh-", "H-") at the end of the pause, it isn't lost
+                            let tail_keep = (sr_usize * 48 / 100).min(silent_samples).min(audio_buffer.len());
+                            if tail_keep > 0 {
+                                let drain_len = audio_buffer.len() - tail_keep;
+                                audio_buffer.drain(0..drain_len);
+                            } else {
+                                audio_buffer.clear();
+                            }
                             speech_detected = false;
                             silent_samples = 0;
                             last_emitted_text.clear();
                             last_inference_time = std::time::Instant::now();
                         }
-                        // Streaming partial transcription update every ~280ms after previous inference finishes
-                        else if speech_detected && audio_buffer.len() >= 3840 && last_inference_time.elapsed().as_millis() >= 280 {
+                        // Streaming partial transcription update every ~240ms while speech is ongoing
+                        else if speech_detected && audio_buffer.len() >= 2560 && last_inference_time.elapsed().as_millis() >= 240 {
                             let model = self.service.model.clone();
                             let buf_clone = audio_buffer.clone();
                             let lang_target = active_language.to_nemotron_lang().to_string();
@@ -372,8 +365,9 @@ impl WebSocketHandler {
                             if let Ok(Ok(transcript)) = transcript_res {
                                 let current_clean = transcript.trim().to_string();
                                 if !current_clean.is_empty() && current_clean != last_emitted_text {
-                                    let delta = if current_clean.starts_with(&last_emitted_text) {
-                                        current_clean[last_emitted_text.len()..].trim().to_string()
+                                    let prev_stem = last_emitted_text.trim_end_matches(&['.', '?', '!', ','][..]).trim();
+                                    let delta = if !prev_stem.is_empty() && current_clean.starts_with(prev_stem) {
+                                        current_clean[prev_stem.len()..].trim().to_string()
                                     } else {
                                         current_clean.clone()
                                     };

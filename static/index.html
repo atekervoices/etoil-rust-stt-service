@@ -175,19 +175,13 @@
             const ratio = inputSampleRate / TARGET_SR;
             const newLength = Math.round(buffer.length / ratio);
             const result = new Float32Array(newLength);
-            let offsetResult = 0;
-            let offsetBuffer = 0;
-            while (offsetResult < result.length) {
-                const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
-                let accum = 0;
-                let count = 0;
-                for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
-                    accum += buffer[i];
-                    count++;
-                }
-                result[offsetResult] = count > 0 ? (accum / count) : 0;
-                offsetResult++;
-                offsetBuffer = nextOffsetBuffer;
+            for (let i = 0; i < newLength; i++) {
+                const srcIdx = i * ratio;
+                const idx0 = Math.floor(srcIdx);
+                const frac = srcIdx - idx0;
+                const s0 = buffer[idx0] || 0;
+                const s1 = buffer[idx0 + 1] !== undefined ? buffer[idx0 + 1] : s0;
+                result[i] = s0 + frac * (s1 - s0);
             }
             return result;
         }
@@ -260,21 +254,25 @@
                 audioBufferQueue = [];
                 streamMode = 'mic';
 
-                mediaStream = await navigator.mediaDevices.getUserMedia({
-                    audio: {
-                        channelCount: 1,
-                        echoCancellation: false,
-                        noiseSuppression: false,
-                        autoGainControl: false
-                    }
-                });
-
                 const AudioCtx = window.AudioContext || window.webkitAudioContext;
-                audioContext = new AudioCtx();
+                try {
+                    audioContext = new AudioCtx({ sampleRate: 16000 });
+                } catch (e) {
+                    audioContext = new AudioCtx();
+                }
                 if (audioContext.state === 'suspended') {
                     await audioContext.resume();
                 }
                 const actualSampleRate = audioContext.sampleRate;
+
+                mediaStream = await navigator.mediaDevices.getUserMedia({
+                    audio: {
+                        channelCount: 1,
+                        echoCancellation: true,
+                        noiseSuppression: true,
+                        autoGainControl: true
+                    }
+                });
 
                 const source = audioContext.createMediaStreamSource(mediaStream);
                 processor = audioContext.createScriptProcessor(4096, 1, 1);
