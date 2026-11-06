@@ -1,10 +1,12 @@
 use base64::Engine;
-use earshot::{Detector as EarshotDetector, FRAME_SIZE as EARSHOT_FRAME_SIZE};
+use earshot::Detector as EarshotDetector;
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use warp::ws::{Message as WarpMessage, WebSocket};
+
+const EARSHOT_FRAME_SIZE: usize = 256; // 16ms frame @ 16,000 Hz
 
 use crate::language::SupportedLanguage;
 use crate::server::NemotronService;
@@ -324,7 +326,9 @@ impl WebSocketHandler {
                         while vad_pending_16k.len() >= EARSHOT_FRAME_SIZE {
                             let frame = &vad_pending_16k[..EARSHOT_FRAME_SIZE];
                             let frame_rms = (frame.iter().map(|&s| s * s).sum::<f32>() / EARSHOT_FRAME_SIZE as f32).sqrt();
-                            let is_voice = vad_detector.predict(frame).is_voice() && frame_rms >= 0.002;
+                            let voice_prob = vad_detector.predict_f32(frame);
+                            let prob_thresh = if speech_detected { 0.35 } else { 0.52 };
+                            let is_voice = voice_prob >= prob_thresh && frame_rms >= 0.002;
 
                             if is_voice {
                                 voiced_streak_frames += 1;

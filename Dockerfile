@@ -74,7 +74,16 @@ RUN rustup update stable && rustup default stable
 
 WORKDIR /app
 
+# Pre-build and cache all Cargo dependencies so source changes compile in ~3s
 COPY Cargo.toml Cargo.lock ./
+RUN mkdir -p src && \
+    echo "" > src/lib.rs && \
+    echo "fn main() {}" > src/api_server.rs && \
+    echo "fn main() {}" > src/main.rs && \
+    echo "fn main() {}" > src/live.rs && \
+    cargo build --release --bin api_server && \
+    rm -rf src target/release/deps/etoil_rust_stt_service* target/release/deps/libetoil_rust_stt_service* target/release/api_server*
+
 COPY src ./src
 COPY static ./static
 
