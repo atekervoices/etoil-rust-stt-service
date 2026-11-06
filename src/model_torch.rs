@@ -178,15 +178,19 @@ impl NemotronTorchModel {
         Ok(waves_out.into_iter().next().unwrap_or_default())
     }
 
-    /// Run End-to-End Encoder with configurable chunk_size (e.g. 4 = 320ms Pass 1 streaming, 14 = 1120ms Pass 2 rescoring).
-    /// Automatically falls back to 2-input forward_ts if an older encoder.pt without dynamic chunk_size is loaded.
+    /// Run End-to-End Encoder with configurable chunk_size (e.g. 4 = 320ms lookahead).
+    /// Appends 160ms (2,560 samples) of trailing zero-padding so the final spoken syllable always has right-context lookahead.
     fn encode_waveform(
         &self,
         audio_16k: &[f32],
         language: &str,
         chunk_size: i64,
     ) -> Result<Tensor, Box<dyn std::error::Error + Send + Sync>> {
-        let wav_tensor = Tensor::from_slice(audio_16k)
+        let mut padded = Vec::with_capacity(audio_16k.len() + 2560);
+        padded.extend_from_slice(audio_16k);
+        padded.resize(audio_16k.len() + 2560, 0.0);
+
+        let wav_tensor = Tensor::from_slice(&padded)
             .unsqueeze(0)
             .to_kind(Kind::Float)
             .to_device(self.device);
@@ -304,6 +308,10 @@ impl NemotronTorchModel {
 
         const BEAM_WIDTH: usize = 4;
         const PRUNE_MARGIN: f64 = 2.8;
+        // Weight applied to the post-emission frame-exit blank transition so emitting a valid token
+        // (where tok_logp > blank_logp) is never penalized into losing against a single-step blank transition,
+        // while keeping silence frames (where tok_logp < blank_logp) strictly dominated by blank.
+        const EXIT_BLANK_WEIGHT: f64 = 0.25;
 
         struct BeamState {
             tokens: Vec<u32>,
@@ -400,7 +408,7 @@ impl NemotronTorchModel {
 
                     let mut new_tokens = beam.tokens.clone();
                     new_tokens.push(tok_u32);
-                    let score1 = beam.score + tok_logp + blank2_logp;
+                    let score1 = beam.score + tok_logp + EXIT_BLANK_WEIGHT * blank2_logp;
 
                     next_beams.push(BeamState {
                         tokens: new_tokens.clone(),
@@ -410,7 +418,7 @@ impl NemotronTorchModel {
                         score: score1,
                     });
 
-                    // Allow a 2nd subword emission on the same 80ms frame if a non-blank token beats blank2_logp
+                    // Allow 2nd and 3rd subword emissions on the same 80ms frame when non-blank beats blank
                     if expanded == 0 {
                         let (top2_vals, top2_idxs) = log_probs2.topk(2, -1, true, true);
                         for k2 in 0..2 {
@@ -426,7 +434,7 @@ impl NemotronTorchModel {
                                 continue;
                             }
                             let tok2_logp = top2_vals.double_value(&[k2]);
-                            if tok2_logp > blank2_logp {
+                            if tok2_logp > blank2_logp - 0.6 {
                                 let tok2_tensor = Tensor::from_slice(&[tok2])
                                     .unsqueeze(0)
                                     .to_kind(Kind::Int64)
@@ -438,12 +446,40 @@ impl NemotronTorchModel {
 
                                 let mut tokens2 = new_tokens.clone();
                                 tokens2.push(tok2_u32);
+                                let score2 = beam.score + tok_logp + tok2_logp + EXIT_BLANK_WEIGHT * blank3_logp;
+
+                                // Check if a 3rd subword also beats blank on this 80ms frame (e.g. 3-piece words like "t-ou-gh")
+                                let (top3_vals, top3_idxs) = log_probs3.topk(1, -1, true, true);
+                                let tok3 = top3_idxs.int64_value(&[0]);
+                                let tok3_u32 = tok3 as u32;
+                                let tok3_logp = top3_vals.double_value(&[0]);
+                                if tok3 != self.blank_id && tok3 != tok2 && tok3_logp > blank3_logp {
+                                    let tok3_tensor = Tensor::from_slice(&[tok3])
+                                        .unsqueeze(0)
+                                        .to_kind(Kind::Int64)
+                                        .to_device(self.device);
+                                    let (dec_out4, h4, c4) = self.step_decoder(&tok3_tensor, &h3, &c3)?;
+                                    let logits4 = self.joint.forward_ts(&[&dec_out4, &frame])?;
+                                    let log_probs4 = logits4.log_softmax(-1, Kind::Float).squeeze_dim(0);
+                                    let blank4_logp = log_probs4.double_value(&[self.blank_id]);
+
+                                    let mut tokens3 = tokens2.clone();
+                                    tokens3.push(tok3_u32);
+                                    next_beams.push(BeamState {
+                                        tokens: tokens3,
+                                        dec_out: dec_out4,
+                                        h: h4,
+                                        c: c4,
+                                        score: beam.score + tok_logp + tok2_logp + tok3_logp + EXIT_BLANK_WEIGHT * blank4_logp,
+                                    });
+                                }
+
                                 next_beams.push(BeamState {
                                     tokens: tokens2,
                                     dec_out: dec_out3,
                                     h: h3,
                                     c: c3,
-                                    score: beam.score + tok_logp + tok2_logp + blank3_logp,
+                                    score: score2,
                                 });
                             }
                         }
