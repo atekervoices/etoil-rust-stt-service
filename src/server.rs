@@ -94,6 +94,13 @@ fn resample_to_16k(samples: &[f32], src_rate: u32) -> Vec<f32> {
     if src_rate == 16000 || samples.is_empty() {
         return samples.to_vec();
     }
+    if samples.len() >= 512 {
+        if let Ok(sinc_resampled) = NemotronTorchModel::resample_to_16k(samples, src_rate) {
+            if !sinc_resampled.is_empty() {
+                return sinc_resampled;
+            }
+        }
+    }
     let ratio = src_rate as f64 / 16000.0;
     let target_len = (samples.len() as f64 / ratio).round() as usize;
     let mut resampled = Vec::with_capacity(target_len);

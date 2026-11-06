@@ -124,6 +124,7 @@ impl WebSocketHandler {
 
         // Connection state
         let mut audio_buffer: Vec<f32> = Vec::with_capacity(16000 * 30);
+        let mut pre_speech_buffer: Vec<f32> = Vec::with_capacity(16000);
         let mut last_emitted_text = String::new();
         let mut last_emitted_final = String::new();
         let mut last_inference_time = std::time::Instant::now();
@@ -131,6 +132,8 @@ impl WebSocketHandler {
         let mut sample_rate: u32 = 16000;
         let mut silent_samples: usize = 0;
         let mut speech_detected: bool = false;
+        let mut noise_floor_rms: f32 = 0.004;
+        let mut speech_peak_rms: f32 = 0.03;
 
         while let Some(msg) = ws_rx.next().await {
             let mut new_audio_samples: Vec<f32> = Vec::new();
@@ -212,10 +215,13 @@ impl WebSocketHandler {
                                         .await;
                                 }
                                 audio_buffer.clear();
+                                pre_speech_buffer.clear();
                                 last_emitted_text.clear();
                                 last_emitted_final.clear();
                                 speech_detected = false;
                                 silent_samples = 0;
+                                noise_floor_rms = 0.004;
+                                speech_peak_rms = 0.03;
                                 println!("WebSocket: Session reset by client request");
                             }
 
@@ -252,6 +258,7 @@ impl WebSocketHandler {
                                     }
                                 }
                                 audio_buffer.clear();
+                                pre_speech_buffer.clear();
                                 last_emitted_text.clear();
                                 speech_detected = false;
                                 silent_samples = 0;
@@ -272,28 +279,52 @@ impl WebSocketHandler {
                     // Process new incoming audio samples
                     if !new_audio_samples.is_empty() {
                         let rms = (new_audio_samples.iter().map(|&s| s * s).sum::<f32>() / new_audio_samples.len().max(1) as f32).sqrt();
-                        audio_buffer.extend(&new_audio_samples);
+                        let sr_usize = sample_rate as usize;
+                        let pre_roll_max = (sr_usize * 3) / 10; // 300ms pre-speech rollback buffer
 
-                        // Sensitive threshold (0.002) so quiet laptop mics are detected reliably
-                        if rms >= 0.002 {
-                            speech_detected = true;
-                            silent_samples = 0;
-                        } else if speech_detected {
-                            silent_samples += new_audio_samples.len();
+                        if !speech_detected {
+                            let onset_thresh = (noise_floor_rms * 2.5).clamp(0.008, 0.035);
+                            if rms >= onset_thresh {
+                                speech_detected = true;
+                                silent_samples = 0;
+                                speech_peak_rms = rms.max(0.02);
+                                audio_buffer.extend_from_slice(&pre_speech_buffer);
+                                pre_speech_buffer.clear();
+                                audio_buffer.extend_from_slice(&new_audio_samples);
+                            } else {
+                                noise_floor_rms = (0.92 * noise_floor_rms + 0.08 * rms).clamp(0.002, 0.020);
+                                pre_speech_buffer.extend_from_slice(&new_audio_samples);
+                                if pre_speech_buffer.len() > pre_roll_max {
+                                    let excess = pre_speech_buffer.len() - pre_roll_max;
+                                    pre_speech_buffer.drain(0..excess);
+                                }
+                            }
+                        } else {
+                            audio_buffer.extend_from_slice(&new_audio_samples);
+                            let silence_thresh = (noise_floor_rms * 1.8)
+                                .max(speech_peak_rms * 0.22)
+                                .clamp(0.006, 0.030);
+
+                            if rms >= silence_thresh {
+                                silent_samples = 0;
+                                speech_peak_rms = (0.85 * speech_peak_rms + 0.15 * rms).clamp(0.015, 0.25);
+                            } else {
+                                silent_samples += new_audio_samples.len();
+                                noise_floor_rms = (0.97 * noise_floor_rms + 0.03 * rms).clamp(0.002, 0.020);
+                            }
                         }
 
                         // Sentence pause detection:
-                        // 1. Standard pause: ~0.75s of silence after speech (>= 0.5s total audio)
-                        // 2. Micro-pause on long continuous speech: ~0.24s of silence when buffer >= 9s
-                        // 3. Hard ceiling: 16s of continuous uninterrupted speech
-                        let sr_usize = sample_rate as usize;
+                        // 1. Standard pause: ~0.64s of silence after speech (>= 0.45s total audio)
+                        // 2. Micro-pause on long continuous speech: ~0.24s of silence when buffer >= 7s
+                        // 3. Hard ceiling: 14s of continuous uninterrupted speech
                         let standard_pause = speech_detected
-                            && silent_samples >= (sr_usize * 75 / 100)
-                            && audio_buffer.len() >= (sr_usize / 2);
+                            && silent_samples >= (sr_usize * 64 / 100)
+                            && audio_buffer.len() >= (sr_usize * 45 / 100);
                         let long_speech_micro_pause = speech_detected
-                            && audio_buffer.len() >= (sr_usize * 9)
+                            && audio_buffer.len() >= (sr_usize * 7)
                             && silent_samples >= (sr_usize * 24 / 100);
-                        let max_buffer_exceeded = audio_buffer.len() >= (sr_usize * 16);
+                        let max_buffer_exceeded = speech_detected && audio_buffer.len() >= (sr_usize * 14);
 
                         if standard_pause || long_speech_micro_pause || max_buffer_exceeded {
                             let model = self.service.model.clone();
@@ -318,16 +349,16 @@ impl WebSocketHandler {
                                 }
                             }
 
-                            // Clear buffer cleanly without overlapping already-emitted audio (prevents duplicate words)
+                            // Clear buffer cleanly without overlapping already-emitted audio
                             audio_buffer.clear();
+                            pre_speech_buffer.clear();
                             speech_detected = false;
                             silent_samples = 0;
                             last_emitted_text.clear();
                             last_inference_time = std::time::Instant::now();
                         }
-                        // Streaming partial transcription update every ~240ms while speech is ongoing
-                        else if speech_detected && audio_buffer.len() >= 2560 && last_inference_time.elapsed().as_millis() >= 240 {
-                            last_inference_time = std::time::Instant::now();
+                        // Streaming partial transcription update every ~280ms after previous inference finishes
+                        else if speech_detected && audio_buffer.len() >= 3840 && last_inference_time.elapsed().as_millis() >= 280 {
                             let model = self.service.model.clone();
                             let buf_clone = audio_buffer.clone();
                             let lang_target = active_language.to_nemotron_lang().to_string();
@@ -336,6 +367,7 @@ impl WebSocketHandler {
                             let transcript_res = tokio::task::spawn_blocking(move || {
                                 model.transcribe(&buf_clone, sr, &lang_target)
                             }).await;
+                            last_inference_time = std::time::Instant::now();
 
                             if let Ok(Ok(transcript)) = transcript_res {
                                 let current_clean = transcript.trim().to_string();
