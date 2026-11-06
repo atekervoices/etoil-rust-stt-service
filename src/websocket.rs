@@ -130,7 +130,9 @@ impl WebSocketHandler {
         let start_time = std::time::Instant::now();
         let mut sample_rate: u32 = 16000;
         let mut silent_samples: usize = 0;
+        let mut dip_samples: usize = 0;
         let mut speech_detected: bool = false;
+        let mut utterance_rms_ema: f32 = 0.02;
 
         while let Some(msg) = ws_rx.next().await {
             let mut new_audio_samples: Vec<f32> = Vec::new();
@@ -216,6 +218,8 @@ impl WebSocketHandler {
                                 last_emitted_final.clear();
                                 speech_detected = false;
                                 silent_samples = 0;
+                                dip_samples = 0;
+                                utterance_rms_ema = 0.02;
                                 println!("WebSocket: Session reset by client request");
                             }
 
@@ -255,6 +259,7 @@ impl WebSocketHandler {
                                 last_emitted_text.clear();
                                 speech_detected = false;
                                 silent_samples = 0;
+                                dip_samples = 0;
                             }
 
                             _ => {}
@@ -287,10 +292,24 @@ impl WebSocketHandler {
 
                         // Sensitive threshold (0.002) so quiet speech syllables (e.g. 0.0035 RMS) are always captured
                         if rms >= 0.002 {
+                            if !speech_detected {
+                                utterance_rms_ema = rms.max(0.01);
+                            } else {
+                                utterance_rms_ema = 0.88 * utterance_rms_ema + 0.12 * rms;
+                            }
                             speech_detected = true;
                             silent_samples = 0;
+
+                            // Detect natural breath/pause dips during continuous speech when ambient noise > 0.002
+                            let dip_thresh = (utterance_rms_ema * 0.38).clamp(0.0025, 0.015);
+                            if rms < dip_thresh {
+                                dip_samples += new_audio_samples.len();
+                            } else {
+                                dip_samples = 0;
+                            }
                         } else if speech_detected {
                             silent_samples += new_audio_samples.len();
+                            dip_samples += new_audio_samples.len();
                         } else {
                             // While waiting for speech onset, keep a rolling 0.64s pre-roll buffer
                             // so idle room silence does not accumulate, without ever clipping word onsets
@@ -301,21 +320,48 @@ impl WebSocketHandler {
                             }
                         }
 
-                        // Sentence pause detection:
-                        // 1. Standard pause: ~1.10s of silence after speech (>= 0.6s total audio) so mid-sentence pauses aren't cut early
-                        // 2. Micro-pause on long continuous speech: ~0.48s of silence when buffer >= 12s
-                        // 3. Hard ceiling: 20s of continuous uninterrupted speech
+                        // Sentence & clause boundary detection (keeps segments in the 4-9s RNN-T LSTM sweet spot):
+                        // 1. Standard quiet pause: ~0.85s of silence (rms < 0.002) after speech (>= 0.6s total audio)
+                        // 2. Breath pause on medium/long speech: ~0.32s energy dip when buffer >= 6.0s
+                        // 3. Smart Valley Split at 9.5s: if continuous speech reaches 9.5s without a pause,
+                        //    split at the quietest 80ms inter-word valley between 6.2s and 8.8s and carry over the remainder!
                         let standard_pause = speech_detected
-                            && silent_samples >= (sr_usize * 110 / 100)
+                            && silent_samples >= (sr_usize * 85 / 100)
                             && audio_buffer.len() >= (sr_usize * 60 / 100);
-                        let long_speech_micro_pause = speech_detected
-                            && audio_buffer.len() >= (sr_usize * 12)
-                            && silent_samples >= (sr_usize * 48 / 100);
-                        let max_buffer_exceeded = audio_buffer.len() >= (sr_usize * 20);
+                        let breath_pause = speech_detected
+                            && audio_buffer.len() >= (sr_usize * 6)
+                            && dip_samples >= (sr_usize * 32 / 100);
+                        let valley_split_needed = speech_detected && audio_buffer.len() >= (sr_usize * 95 / 10);
 
-                        if standard_pause || long_speech_micro_pause || max_buffer_exceeded {
+                        if standard_pause || breath_pause || valley_split_needed {
+                            // Determine exact split point so we NEVER cut through the middle of an active word
+                            let split_pos = if valley_split_needed && !standard_pause && !breath_pause {
+                                let search_start = (sr_usize * 62 / 10).min(audio_buffer.len());
+                                let search_end = (sr_usize * 88 / 10).min(audio_buffer.len());
+                                let win = (sr_usize * 8 / 100).max(640); // 80ms window
+                                let step = win / 2;
+                                let mut best_idx = search_end;
+                                let mut min_energy = f32::MAX;
+                                if search_end > search_start + win {
+                                    let mut idx = search_start;
+                                    while idx + win <= search_end {
+                                        let e: f32 = audio_buffer[idx..idx + win].iter().map(|&x| x * x).sum();
+                                        if e < min_energy {
+                                            min_energy = e;
+                                            best_idx = idx + win / 2;
+                                        }
+                                        idx += step;
+                                    }
+                                }
+                                best_idx
+                            } else {
+                                audio_buffer.len()
+                            };
+
                             let model = self.service.model.clone();
-                            let buf_clone = audio_buffer.clone();
+                            // Include up to 160ms past split_pos for encoder right-context lookahead when valley-splitting
+                            let transcribe_end = (split_pos + (sr_usize * 16 / 100)).min(audio_buffer.len());
+                            let buf_clone = audio_buffer[..transcribe_end].to_vec();
                             let lang_target = active_language.to_nemotron_lang().to_string();
                             let sr = sample_rate;
 
@@ -336,17 +382,26 @@ impl WebSocketHandler {
                                 }
                             }
 
-                            // Keep the trailing 0.48s of the silent pause as pre-roll for the next sentence
-                            // so if the speaker begins a soft consonant ("Wh-", "H-") at the end of the pause, it isn't lost
-                            let tail_keep = (sr_usize * 48 / 100).min(silent_samples).min(audio_buffer.len());
-                            if tail_keep > 0 {
-                                let drain_len = audio_buffer.len() - tail_keep;
-                                audio_buffer.drain(0..drain_len);
+                            if split_pos < audio_buffer.len() {
+                                // Valley split: retain all audio spoken after split_pos (plus 80ms lead-in) for the next segment!
+                                let drain_to = split_pos.saturating_sub(sr_usize * 8 / 100);
+                                audio_buffer.drain(0..drain_to);
+                                speech_detected = true;
+                                silent_samples = 0;
+                                dip_samples = 0;
                             } else {
-                                audio_buffer.clear();
+                                // Pause split: keep the trailing 0.32s of the pause as pre-roll for the next sentence
+                                let tail_keep = (sr_usize * 32 / 100).min(dip_samples.max(silent_samples)).min(audio_buffer.len());
+                                if tail_keep > 0 {
+                                    let drain_len = audio_buffer.len() - tail_keep;
+                                    audio_buffer.drain(0..drain_len);
+                                } else {
+                                    audio_buffer.clear();
+                                }
+                                speech_detected = false;
+                                silent_samples = 0;
+                                dip_samples = 0;
                             }
-                            speech_detected = false;
-                            silent_samples = 0;
                             last_emitted_text.clear();
                             last_inference_time = std::time::Instant::now();
                         }
