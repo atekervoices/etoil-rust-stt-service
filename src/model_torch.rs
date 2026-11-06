@@ -178,8 +178,37 @@ impl NemotronTorchModel {
         Ok(waves_out.into_iter().next().unwrap_or_default())
     }
 
-    /// Transcribe an audio waveform with RNN-T greedy decoding
-    pub fn transcribe(
+    /// Run End-to-End Encoder with configurable chunk_size (e.g. 4 = 320ms Pass 1 streaming, 14 = 1120ms Pass 2 rescoring).
+    /// Automatically falls back to 2-input forward_ts if an older encoder.pt without dynamic chunk_size is loaded.
+    fn encode_waveform(
+        &self,
+        audio_16k: &[f32],
+        language: &str,
+        chunk_size: i64,
+    ) -> Result<Tensor, Box<dyn std::error::Error + Send + Sync>> {
+        let wav_tensor = Tensor::from_slice(audio_16k)
+            .unsqueeze(0)
+            .to_kind(Kind::Float)
+            .to_device(self.device);
+        let prompt_id = self.resolve_prompt_id(language);
+        let prompt_tensor = Tensor::from_slice(&[prompt_id])
+            .to_kind(Kind::Int64)
+            .to_device(self.device);
+        let chunk_tensor = Tensor::from_slice(&[chunk_size])
+            .to_kind(Kind::Int64)
+            .to_device(self.device);
+
+        match self.encoder.forward_ts(&[&wav_tensor, &prompt_tensor, &chunk_tensor]) {
+            Ok(enc_out) => Ok(enc_out),
+            Err(_) => {
+                let enc_out = self.encoder.forward_ts(&[&wav_tensor, &prompt_tensor])?;
+                Ok(enc_out)
+            }
+        }
+    }
+
+    /// Pass 1 (Streaming Partials): Fast 320ms lookahead (chunk_size = 4) + RNN-T Greedy Decoding (beam = 1)
+    pub fn transcribe_streaming(
         &self,
         raw_audio: &[f32],
         orig_sr: u32,
@@ -189,26 +218,13 @@ impl NemotronTorchModel {
             return Ok(String::new());
         }
 
-        // 1. Ensure 16kHz sample rate
         let audio_16k = Self::resample_to_16k(raw_audio, orig_sr)?;
-
         let _guard = tch::no_grad_guard();
 
-        // 2. Prepare raw audio waveform tensor: shape [1, N] on target device
-        let wav_tensor = Tensor::from_slice(&audio_16k)
-            .unsqueeze(0)
-            .to_kind(Kind::Float)
-            .to_device(self.device);
-        let prompt_id = self.resolve_prompt_id(language);
-        let prompt_tensor = Tensor::from_slice(&[prompt_id])
-            .to_kind(Kind::Int64)
-            .to_device(self.device);
-
-        // 3. Run End-to-End Encoder: waveform [1, N] -> audio features [1, T, 640]
-        let enc_out = self.encoder.forward_ts(&[wav_tensor, prompt_tensor])?;
+        // Pass 1 uses chunk_size = 4 (320ms causal lookahead)
+        let enc_out = self.encode_waveform(&audio_16k, language, 4)?;
         let num_frames = enc_out.size()[1];
 
-        // 4. Initialize Decoder LSTM states (2 layers, hidden size 640) on target device
         let mut h = Tensor::zeros([2, 1, 640], (Kind::Float, self.device));
         let mut c = Tensor::zeros([2, 1, 640], (Kind::Float, self.device));
         let mut last_token = Tensor::from_slice(&[self.blank_id])
@@ -220,27 +236,21 @@ impl NemotronTorchModel {
         h = new_h;
         c = new_c;
 
-        // 5. RNN-T Greedy Decoding Loop
         let mut emitted_tokens: Vec<u32> = Vec::new();
 
         for t in 0..num_frames {
-            let frame = enc_out.slice(1, t, t + 1, 1); // [1, 1, 640]
+            let frame = enc_out.slice(1, t, t + 1, 1);
             let mut prev_token_in_frame: Option<i64> = None;
             for _ in 0..6 {
-                let logits = self.joint.forward_ts(&[&dec_out, &frame])?; // [1, Vocab]
+                let logits = self.joint.forward_ts(&[&dec_out, &frame])?;
                 let token = logits.argmax(-1, false).int64_value(&[]);
 
                 if token == self.blank_id {
-                    // Blank emitted -> advance acoustic frame, keep decoder state intact
                     break;
                 }
-
-                // Prevent single-frame RNN-T repetition loops (e.g. emitting the same BPE syllable twice on one 80ms frame)
                 if prev_token_in_frame == Some(token) {
                     break;
                 }
-
-                // Prevent multi-frame stutter loops (never emit the exact same subword token >2 times consecutively)
                 if emitted_tokens.len() >= 2
                     && emitted_tokens[emitted_tokens.len() - 1] == token as u32
                     && emitted_tokens[emitted_tokens.len() - 2] == token as u32
@@ -248,7 +258,6 @@ impl NemotronTorchModel {
                     break;
                 }
 
-                // Non-blank emitted -> record token and advance decoder LSTM
                 prev_token_in_frame = Some(token);
                 emitted_tokens.push(token as u32);
                 last_token = Tensor::from_slice(&[token])
@@ -262,11 +271,208 @@ impl NemotronTorchModel {
             }
         }
 
-        // 6. Decode token IDs into text
         let transcript = self.tokenizer.decode(&emitted_tokens, true)
             .map_err(|e| format!("Tokenizer decode error: {e}"))?;
-
         Ok(transcript)
+    }
+
+    /// Pass 2 (Endpoint Rescoring & Sync HTTP): Extended 1,120ms lookahead (chunk_size = 14) + RNN-T Beam Search (beam = 4)
+    /// Resolves co-articulated subword ambiguities ("totroduce" -> "to introduce", "transction" -> "transcription", "uble" -> "double")
+    pub fn transcribe_final(
+        &self,
+        raw_audio: &[f32],
+        orig_sr: u32,
+        language: &str,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        if raw_audio.is_empty() {
+            return Ok(String::new());
+        }
+
+        let audio_16k = Self::resample_to_16k(raw_audio, orig_sr)?;
+        let _guard = tch::no_grad_guard();
+
+        // Pass 2 uses chunk_size = 14 (13 lookahead frames = 1,120ms right-context across word boundaries)
+        let enc_out = self.encode_waveform(&audio_16k, language, 14)?;
+        let num_frames = enc_out.size()[1];
+
+        const BEAM_WIDTH: usize = 4;
+        const LENGTH_BONUS: f64 = 0.16;
+        const PRUNE_MARGIN: f64 = 3.2;
+
+        struct BeamState {
+            tokens: Vec<u32>,
+            dec_out: Tensor,
+            h: Tensor,
+            c: Tensor,
+            score: f64,
+        }
+
+        #[inline]
+        fn log_sum_exp(a: f64, b: f64) -> f64 {
+            let m = a.max(b);
+            m + (1.0 + (-(a - b).abs()).exp()).ln()
+        }
+
+        let h0 = Tensor::zeros([2, 1, 640], (Kind::Float, self.device));
+        let c0 = Tensor::zeros([2, 1, 640], (Kind::Float, self.device));
+        let blank_tok = Tensor::from_slice(&[self.blank_id])
+            .unsqueeze(0)
+            .to_kind(Kind::Int64)
+            .to_device(self.device);
+        let (init_dec_out, init_h, init_c) = self.step_decoder(&blank_tok, &h0, &c0)?;
+
+        let mut beams = vec![BeamState {
+            tokens: Vec::new(),
+            dec_out: init_dec_out,
+            h: init_h,
+            c: init_c,
+            score: 0.0,
+        }];
+
+        for t in 0..num_frames {
+            let frame = enc_out.slice(1, t, t + 1, 1); // [1, 1, 640]
+            let b_len = beams.len() as i64;
+
+            // Evaluate Joint Network across all active beams in a single batched GPU kernel call
+            let dec_refs: Vec<&Tensor> = beams.iter().map(|b| &b.dec_out).collect();
+            let batch_dec = Tensor::cat(&dec_refs, 0); // [B, 1, 640]
+            let batch_frame = frame.expand([b_len, 1, 640], true); // [B, 1, 640]
+            let batch_logits = self.joint.forward_ts(&[&batch_dec, &batch_frame])?; // [B, Vocab]
+            let batch_log_probs = batch_logits.log_softmax(-1, Kind::Float); // [B, Vocab]
+
+            let mut next_beams: Vec<BeamState> = Vec::with_capacity(BEAM_WIDTH * 4);
+
+            for (b_idx, beam) in beams.iter().enumerate() {
+                let log_probs = batch_log_probs.select(0, b_idx as i64); // [Vocab]
+                let blank_logp = log_probs.double_value(&[self.blank_id]);
+
+                // 1. Blank transition: advance to frame t+1 keeping current decoder state
+                next_beams.push(BeamState {
+                    tokens: beam.tokens.clone(),
+                    dec_out: beam.dec_out.shallow_clone(),
+                    h: beam.h.shallow_clone(),
+                    c: beam.c.shallow_clone(),
+                    score: beam.score + blank_logp,
+                });
+
+                // 2. Non-blank transitions: inspect top-4 tokens
+                let (top_vals, top_idxs) = log_probs.topk(4, -1, true, true);
+                let mut expanded = 0usize;
+
+                for k in 0..4 {
+                    let tok = top_idxs.int64_value(&[k]);
+                    if tok == self.blank_id {
+                        continue;
+                    }
+                    let tok_logp = top_vals.double_value(&[k]);
+                    if tok_logp < blank_logp - PRUNE_MARGIN {
+                        break;
+                    }
+
+                    // Guard against >2 consecutive identical subword tokens
+                    let tok_u32 = tok as u32;
+                    if beam.tokens.len() >= 2
+                        && beam.tokens[beam.tokens.len() - 1] == tok_u32
+                        && beam.tokens[beam.tokens.len() - 2] == tok_u32
+                    {
+                        continue;
+                    }
+
+                    let tok_tensor = Tensor::from_slice(&[tok])
+                        .unsqueeze(0)
+                        .to_kind(Kind::Int64)
+                        .to_device(self.device);
+                    let (next_dec_out, next_h, next_c) = self.step_decoder(&tok_tensor, &beam.h, &beam.c)?;
+
+                    // Score blank transition after emitting tok on frame t
+                    let logits2 = self.joint.forward_ts(&[&next_dec_out, &frame])?;
+                    let log_probs2 = logits2.log_softmax(-1, Kind::Float).squeeze_dim(0);
+                    let blank2_logp = log_probs2.double_value(&[self.blank_id]);
+
+                    let mut new_tokens = beam.tokens.clone();
+                    new_tokens.push(tok_u32);
+                    let score1 = beam.score + tok_logp + LENGTH_BONUS + blank2_logp;
+
+                    next_beams.push(BeamState {
+                        tokens: new_tokens.clone(),
+                        dec_out: next_dec_out.shallow_clone(),
+                        h: next_h.shallow_clone(),
+                        c: next_c.shallow_clone(),
+                        score: score1,
+                    });
+
+                    // Allow a 2nd subword emission on the same 80ms frame if a non-blank token beats blank2_logp
+                    if expanded == 0 {
+                        let (top2_vals, top2_idxs) = log_probs2.topk(2, -1, true, true);
+                        for k2 in 0..2 {
+                            let tok2 = top2_idxs.int64_value(&[k2]);
+                            if tok2 == self.blank_id || tok2 == tok {
+                                continue;
+                            }
+                            let tok2_logp = top2_vals.double_value(&[k2]);
+                            if tok2_logp > blank2_logp {
+                                let tok2_tensor = Tensor::from_slice(&[tok2])
+                                    .unsqueeze(0)
+                                    .to_kind(Kind::Int64)
+                                    .to_device(self.device);
+                                let (dec_out3, h3, c3) = self.step_decoder(&tok2_tensor, &next_h, &next_c)?;
+                                let logits3 = self.joint.forward_ts(&[&dec_out3, &frame])?;
+                                let log_probs3 = logits3.log_softmax(-1, Kind::Float).squeeze_dim(0);
+                                let blank3_logp = log_probs3.double_value(&[self.blank_id]);
+
+                                let mut tokens2 = new_tokens.clone();
+                                tokens2.push(tok2 as u32);
+                                next_beams.push(BeamState {
+                                    tokens: tokens2,
+                                    dec_out: dec_out3,
+                                    h: h3,
+                                    c: c3,
+                                    score: beam.score + tok_logp + tok2_logp + (2.0 * LENGTH_BONUS) + blank3_logp,
+                                });
+                            }
+                        }
+                    }
+
+                    expanded += 1;
+                    if expanded >= 3 {
+                        break;
+                    }
+                }
+            }
+
+            // Recombine identical token sequences via log-sum-exp and keep top BEAM_WIDTH hypotheses
+            let mut merged: Vec<BeamState> = Vec::with_capacity(next_beams.len());
+            for cand in next_beams {
+                if let Some(existing) = merged.iter_mut().find(|m| m.tokens == cand.tokens) {
+                    existing.score = log_sum_exp(existing.score, cand.score);
+                } else {
+                    merged.push(cand);
+                }
+            }
+            merged.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+            merged.truncate(BEAM_WIDTH);
+            beams = merged;
+        }
+
+        let best_tokens = beams
+            .into_iter()
+            .next()
+            .map(|b| b.tokens)
+            .unwrap_or_default();
+
+        let transcript = self.tokenizer.decode(&best_tokens, true)
+            .map_err(|e| format!("Tokenizer decode error: {e}"))?;
+        Ok(transcript)
+    }
+
+    /// Default transcription entry point (uses Pass 2 Full-Lookahead + Beam Search)
+    pub fn transcribe(
+        &self,
+        raw_audio: &[f32],
+        orig_sr: u32,
+        language: &str,
+    ) -> Result<String, Box<dyn std::error::Error + Send + Sync>> {
+        self.transcribe_final(raw_audio, orig_sr, language)
     }
 
     fn step_decoder(

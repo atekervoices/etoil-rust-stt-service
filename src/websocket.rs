@@ -231,7 +231,7 @@ impl WebSocketHandler {
                                     let sr = sample_rate;
 
                                     let transcript_res = tokio::task::spawn_blocking(move || {
-                                        model.transcribe(&buf_clone, sr, &lang_target)
+                                        model.transcribe_final(&buf_clone, sr, &lang_target)
                                     }).await;
 
                                     if let Ok(Ok(transcript)) = transcript_res {
@@ -366,16 +366,16 @@ impl WebSocketHandler {
                             let sr = sample_rate;
 
                             let transcript_res = tokio::task::spawn_blocking(move || {
-                                model.transcribe(&buf_clone, sr, &lang_target)
+                                model.transcribe_final(&buf_clone, sr, &lang_target)
                             }).await;
 
                             if let Ok(Ok(transcript)) = transcript_res {
                                 let final_text = transcript.trim().to_string();
                                 if !final_text.is_empty() {
-                                    println!("[Sentence | {}] {}", active_language.code(), final_text);
+                                    println!("[Pass 2 Final | {}] {}", active_language.code(), final_text);
                                     let _ = tx.send(WSMessage::Final {
                                         text: final_text,
-                                        confidence: 0.95,
+                                        confidence: 0.98,
                                         timestamp: start_time.elapsed().as_secs_f64(),
                                         processing_time: start_time.elapsed().as_secs_f64(),
                                     }).await;
@@ -405,7 +405,7 @@ impl WebSocketHandler {
                             last_emitted_text.clear();
                             last_inference_time = std::time::Instant::now();
                         }
-                        // Streaming partial transcription update every ~240ms while speech is ongoing
+                        // Pass 1: Fast streaming partial transcription update every ~240ms while speech is ongoing
                         else if speech_detected && audio_buffer.len() >= 2560 && last_inference_time.elapsed().as_millis() >= 240 {
                             let model = self.service.model.clone();
                             let buf_clone = audio_buffer.clone();
@@ -413,7 +413,7 @@ impl WebSocketHandler {
                             let sr = sample_rate;
 
                             let transcript_res = tokio::task::spawn_blocking(move || {
-                                model.transcribe(&buf_clone, sr, &lang_target)
+                                model.transcribe_streaming(&buf_clone, sr, &lang_target)
                             }).await;
                             last_inference_time = std::time::Instant::now();
 

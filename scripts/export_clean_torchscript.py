@@ -50,18 +50,18 @@ class EndToEndEncoderWrapper(nn.Module):
         self.encoder_projector = m.encoder_projector
         self.num_prompts = m.config.num_prompts
 
-        # Default num_lookahead_tokens = 3 (320ms chunk attention, matching training)
+        # Default num_lookahead_tokens = 3 (320ms chunk attention for Pass 1; Pass 2 dynamically overrides chunk_size to 14 = 1120ms)
         if hasattr(m.encoder, "_resolve_attn_context"):
             left_ctx, right_ctx = m.encoder._resolve_attn_context(num_lookahead_tokens)
         else:
             left_ctx, right_ctx = 56, num_lookahead_tokens
+        self.left_ctx_frames = max(left_ctx, 56)
         self.chunk_size = right_ctx + 1
-        self.left_context_chunks = left_ctx // self.chunk_size if left_ctx >= 0 else 10_000
+        self.left_context_chunks = self.left_ctx_frames // self.chunk_size
         lookahead_ms = self.chunk_size * 80
         print(
-            f"Configured streaming lookahead: {lookahead_ms}ms (num_lookahead_tokens={num_lookahead_tokens}, "
-            f"left_ctx={left_ctx}, right_ctx={right_ctx}, chunk_size={self.chunk_size}, "
-            f"left_context_chunks={self.left_context_chunks})"
+            f"Configured dynamic multi-pass lookahead: Pass 1 default={lookahead_ms}ms (chunk_size={self.chunk_size}), "
+            f"Pass 2 endpoint rescoring=1120ms (chunk_size=14), left_ctx_frames={self.left_ctx_frames}"
         )
 
         # Mel extraction parameters
@@ -103,7 +103,7 @@ class EndToEndEncoderWrapper(nn.Module):
         input_features = input_features * mask.unsqueeze(-1)
         return input_features
 
-    def forward(self, waveform: torch.Tensor, prompt_ids: torch.Tensor):
+    def forward(self, waveform: torch.Tensor, prompt_ids: torch.Tensor, chunk_size: torch.Tensor):
         # 1. Feature extraction from raw audio waveform [1, N]
         input_features = self.extract_fbank(waveform)
 
@@ -112,15 +112,16 @@ class EndToEndEncoderWrapper(nn.Module):
         embeds = embeds * self.encoder.input_scale
         T = embeds.shape[1]
 
-        # 3. Dynamic 2D chunked causal mask without vmap
-        # Use cumsum on new_ones to guarantee device-agnostic execution in TorchScript on CUDA and CPU
+        # 3. Dynamic 2D chunked causal mask supporting both Pass 1 (chunk_size=4, 320ms) and Pass 2 (chunk_size=14, 1120ms)
+        cs = torch.clamp(chunk_size[0], min=1)
+        left_chunks = torch.clamp(torch.div(self.left_ctx_frames, cs, rounding_mode="trunc"), min=1)
         idx = torch.cumsum(embeds.new_ones(T, dtype=torch.long), dim=0) - 1
         q = idx[:, None]
         k = idx[None, :]
-        q_chunk = torch.div(q, self.chunk_size, rounding_mode="trunc")
-        kv_chunk = torch.div(k, self.chunk_size, rounding_mode="trunc")
+        q_chunk = torch.div(q, cs, rounding_mode="trunc")
+        kv_chunk = torch.div(k, cs, rounding_mode="trunc")
         diff = q_chunk - kv_chunk
-        mask = (diff >= 0) & (diff <= self.left_context_chunks)
+        mask = (diff >= 0) & (diff <= left_chunks)
         attention_mask = mask.unsqueeze(0).unsqueeze(0) # [1, 1, T, T]
         all_masked_rows = torch.all(~attention_mask, dim=-1)
 
@@ -209,11 +210,12 @@ else:
     raw_waveform = torch.randn(1, 16000, dtype=torch.float32)
 
 prompts = torch.tensor([63], dtype=torch.long)
+default_chunk_tensor = torch.tensor([lookahead_tokens + 1], dtype=torch.long)
 
 with torch.inference_mode():
     print("Tracing EndToEndEncoderWrapper...")
     e2e_enc = EndToEndEncoderWrapper(model, fe, num_lookahead_tokens=lookahead_tokens).eval()
-    traced_enc = torch.jit.trace(e2e_enc, (raw_waveform, prompts))
+    traced_enc = torch.jit.trace(e2e_enc, (raw_waveform, prompts, default_chunk_tensor))
     enc_path = os.path.join(output_dir, "encoder.pt")
     traced_enc.save(enc_path)
     print(f"Saved {enc_path}")
