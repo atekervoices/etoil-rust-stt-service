@@ -1,4 +1,5 @@
 use base64::Engine;
+use earshot::{Detector as EarshotDetector, FRAME_SIZE as EARSHOT_FRAME_SIZE};
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -122,8 +123,13 @@ impl WebSocketHandler {
             }
         });
 
-        // Connection state
+        // Connection state + Earshot Neural VAD (16ms / 256-sample frames @ 16kHz)
         let mut audio_buffer: Vec<f32> = Vec::with_capacity(16000 * 30);
+        let mut vad_detector = EarshotDetector::default_boxed();
+        let mut vad_pending_16k: Vec<f32> = Vec::with_capacity(EARSHOT_FRAME_SIZE * 16);
+        let mut voiced_streak_frames: usize = 0;
+        let mut unvoiced_frames: usize = 0;
+        let mut voiced_frames_in_utterance: usize = 0;
         let mut last_emitted_text = String::new();
         let mut last_emitted_final = String::new();
         let mut last_inference_time = std::time::Instant::now();
@@ -214,17 +220,22 @@ impl WebSocketHandler {
                                         .await;
                                 }
                                 audio_buffer.clear();
+                                vad_detector.reset();
+                                vad_pending_16k.clear();
+                                voiced_streak_frames = 0;
+                                unvoiced_frames = 0;
+                                voiced_frames_in_utterance = 0;
                                 last_emitted_text.clear();
                                 last_emitted_final.clear();
                                 speech_detected = false;
                                 silent_samples = 0;
                                 dip_samples = 0;
                                 utterance_rms_ema = 0.02;
-                                println!("WebSocket: Session reset by client request");
+                                println!("WebSocket: Session and Earshot VAD reset by client request");
                             }
 
                             WSMessage::End | WSMessage::Flush => {
-                                if !audio_buffer.is_empty() {
+                                if !audio_buffer.is_empty() && voiced_frames_in_utterance >= 4 {
                                     let model = self.service.model.clone();
                                     let buf_clone = audio_buffer.clone();
                                     let lang_target = active_language.to_nemotron_lang().to_string();
@@ -256,6 +267,11 @@ impl WebSocketHandler {
                                     }
                                 }
                                 audio_buffer.clear();
+                                vad_detector.reset();
+                                vad_pending_16k.clear();
+                                voiced_streak_frames = 0;
+                                unvoiced_frames = 0;
+                                voiced_frames_in_utterance = 0;
                                 last_emitted_text.clear();
                                 speech_detected = false;
                                 silent_samples = 0;
@@ -284,57 +300,95 @@ impl WebSocketHandler {
                         break;
                     }
 
-                    // Process new incoming audio samples
+                    // Process new incoming audio samples with Earshot Neural VAD (16ms frames)
                     if !new_audio_samples.is_empty() {
                         let rms = (new_audio_samples.iter().map(|&s| s * s).sum::<f32>() / new_audio_samples.len().max(1) as f32).sqrt();
                         let sr_usize = sample_rate as usize;
+
+                        // Always append continuous audio to buffer (never strip frames inside an utterance
+                        // so FastConformer causal convolutions and positional encodings stay intact)
                         audio_buffer.extend(&new_audio_samples);
 
-                        // Hysteresis VAD:
-                        // - Require rms >= 0.0045 to trigger speech onset (!speech_detected -> true) so quiet post-sentence
-                        //   breaths/hiss (0.002-0.004) never cause false-start partials like "Pokudi?" or "P School."
-                        // - Once speech_detected == true, keep sensitive threshold (0.002) so soft trailing syllables are never clipped.
-                        let active_thresh = if speech_detected { 0.002 } else { 0.0045 };
-                        if rms >= active_thresh {
-                            if !speech_detected {
-                                utterance_rms_ema = rms.max(0.01);
-                            } else {
-                                utterance_rms_ema = 0.88 * utterance_rms_ema + 0.12 * rms;
+                        // Feed 16kHz audio frames (256 samples = 16ms) into Earshot Neural VAD
+                        if sample_rate == 16000 {
+                            vad_pending_16k.extend_from_slice(&new_audio_samples);
+                        } else {
+                            let ratio = sample_rate as f32 / 16000.0;
+                            let out_len = (new_audio_samples.len() as f32 / ratio).round() as usize;
+                            for i in 0..out_len {
+                                let src_idx = (i as f32 * ratio) as usize;
+                                vad_pending_16k.push(new_audio_samples[src_idx.min(new_audio_samples.len() - 1)]);
                             }
-                            speech_detected = true;
-                            silent_samples = 0;
+                        }
 
-                            // Detect natural breath/pause dips during continuous speech when ambient noise > 0.002
-                            let dip_thresh = (utterance_rms_ema * 0.38).clamp(0.0025, 0.015);
-                            if rms < dip_thresh {
+                        while vad_pending_16k.len() >= EARSHOT_FRAME_SIZE {
+                            let frame = &vad_pending_16k[..EARSHOT_FRAME_SIZE];
+                            let frame_rms = (frame.iter().map(|&s| s * s).sum::<f32>() / EARSHOT_FRAME_SIZE as f32).sqrt();
+                            let is_voice = vad_detector.predict(frame).is_voice() && frame_rms >= 0.002;
+
+                            if is_voice {
+                                voiced_streak_frames += 1;
+                                unvoiced_frames = 0;
+
+                                // Require 3 consecutive voiced 16ms frames (48ms of true human voice)
+                                // so mic breath puffs, desk bumps, and clicks never trigger false starts
+                                if !speech_detected && voiced_streak_frames >= 3 {
+                                    speech_detected = true;
+                                    silent_samples = 0;
+                                    dip_samples = 0;
+                                    utterance_rms_ema = frame_rms.max(0.01);
+                                }
+                                if speech_detected {
+                                    voiced_frames_in_utterance += 1;
+                                    utterance_rms_ema = 0.90 * utterance_rms_ema + 0.10 * frame_rms;
+                                }
+                            } else {
+                                voiced_streak_frames = 0;
+                                if speech_detected {
+                                    unvoiced_frames += 1;
+                                }
+                            }
+                            vad_pending_16k.drain(0..EARSHOT_FRAME_SIZE);
+                        }
+
+                        // Track energy dips/silence alongside Earshot unvoiced frame counts
+                        if speech_detected {
+                            if rms < 0.002 {
+                                silent_samples += new_audio_samples.len();
                                 dip_samples += new_audio_samples.len();
                             } else {
-                                dip_samples = 0;
+                                silent_samples = 0;
+                                let dip_thresh = (utterance_rms_ema * 0.38).clamp(0.0025, 0.015);
+                                if rms < dip_thresh {
+                                    dip_samples += new_audio_samples.len();
+                                } else {
+                                    dip_samples = 0;
+                                }
                             }
-                        } else if speech_detected {
-                            silent_samples += new_audio_samples.len();
-                            dip_samples += new_audio_samples.len();
                         } else {
-                            // While waiting for speech onset, keep a short 0.16s (1-chunk) pre-roll buffer
-                            // so consonant onsets are preserved without accumulating old pause noise
-                            let pre_roll_samples = (sr_usize * 16) / 100;
+                            // While waiting for Earshot to confirm speech onset (48ms), keep a rolling 0.24s pre-roll
+                            // buffer so leading consonants ("c" in "could", "p" in "please") are 100% preserved
+                            let pre_roll_samples = (sr_usize * 24) / 100;
                             if audio_buffer.len() > pre_roll_samples {
                                 let excess = audio_buffer.len() - pre_roll_samples;
                                 audio_buffer.drain(0..excess);
                             }
                         }
 
-                        // Sentence & clause boundary detection (keeps segments in the 4-9s RNN-T LSTM sweet spot):
-                        // 1. Standard quiet pause: ~0.85s of silence (rms < 0.002) after speech (>= 0.6s total audio)
-                        // 2. Breath pause on medium/long speech: ~0.32s energy dip when buffer >= 6.0s
-                        // 3. Smart Valley Split at 9.5s: if continuous speech reaches 9.5s without a pause,
+                        // Sentence & clause boundary detection powered by Earshot Neural VAD + Valley Splitter:
+                        // 1. Standard pause: 50 unvoiced Earshot frames (~800ms of non-voice, noise-resilient!) or 0.85s quiet silence
+                        //    after at least 6 voiced frames (96ms of real speech) and >= 0.6s total buffer.
+                        // 2. Breath pause on medium/long speech (>= 5.8s): 18 unvoiced Earshot frames (~288ms breath) or 0.32s energy dip.
+                        // 3. Smart Valley Split at 9.5s: if continuous speech reaches 9.5s without a breath pause,
                         //    split at the quietest 80ms inter-word valley between 6.2s and 8.8s and carry over the remainder!
                         let standard_pause = speech_detected
-                            && silent_samples >= (sr_usize * 85 / 100)
+                            && voiced_frames_in_utterance >= 6
+                            && (unvoiced_frames >= 50 || silent_samples >= (sr_usize * 85 / 100))
                             && audio_buffer.len() >= (sr_usize * 60 / 100);
                         let breath_pause = speech_detected
-                            && audio_buffer.len() >= (sr_usize * 6)
-                            && dip_samples >= (sr_usize * 32 / 100);
+                            && voiced_frames_in_utterance >= 6
+                            && audio_buffer.len() >= (sr_usize * 58 / 10)
+                            && (unvoiced_frames >= 18 || dip_samples >= (sr_usize * 32 / 100));
                         let valley_split_needed = speech_detected && audio_buffer.len() >= (sr_usize * 95 / 10);
 
                         if standard_pause || breath_pause || valley_split_needed {
@@ -391,21 +445,27 @@ impl WebSocketHandler {
                                 let drain_to = split_pos.saturating_sub(sr_usize * 8 / 100);
                                 audio_buffer.drain(0..drain_to);
                                 speech_detected = true;
+                                unvoiced_frames = 0;
                                 silent_samples = 0;
                                 dip_samples = 0;
                             } else {
-                                // Pause split: clear buffer cleanly so trailing breath/reverb from the previous sentence
-                                // never leaks into the start of the next utterance
+                                // Pause split: clear buffer and reset Earshot state cleanly so trailing breath/reverb
+                                // from the previous sentence never leaks into the start of the next utterance
                                 audio_buffer.clear();
+                                vad_detector.reset();
+                                vad_pending_16k.clear();
                                 speech_detected = false;
+                                voiced_streak_frames = 0;
+                                unvoiced_frames = 0;
+                                voiced_frames_in_utterance = 0;
                                 silent_samples = 0;
                                 dip_samples = 0;
                             }
                             last_emitted_text.clear();
                             last_inference_time = std::time::Instant::now();
                         }
-                        // Pass 1: Fast streaming partial transcription update every ~240ms once >= 0.48s of speech is buffered
-                        else if speech_detected && audio_buffer.len() >= (sr_usize * 48 / 100) && last_inference_time.elapsed().as_millis() >= 240 {
+                        // Pass 1: Fast streaming partial transcription update every ~240ms once Earshot confirms >= 6 voiced frames (96ms)
+                        else if speech_detected && voiced_frames_in_utterance >= 6 && audio_buffer.len() >= (sr_usize * 48 / 100) && last_inference_time.elapsed().as_millis() >= 240 {
                             let model = self.service.model.clone();
                             let buf_clone = audio_buffer.clone();
                             let lang_target = active_language.to_nemotron_lang().to_string();

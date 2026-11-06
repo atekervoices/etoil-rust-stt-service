@@ -741,7 +741,7 @@ pub async fn run_server(service: Arc<NemotronService>, port: u16) {
 
     println!("============================================================");
     println!(" PhosAI Elgon Streaming ASR Service running on port {port}");
-    println!(" Engine: LibTorch (tch-rs) | 2-Pass FastConformer RNN-T (Pass 1: Greedy | Pass 2: Beam-4 ALSD)");
+    println!(" Engine: LibTorch (tch-rs) + Earshot Neural VAD | 2-Pass FastConformer RNN-T (Pass 1: Greedy | Pass 2: Beam-4 ALSD)");
     println!(" Languages: English (en, eng, en-UG, eng-UG) & Luganda (lug, lg, lug-UG)");
     println!(" Model: {model_id}");
     println!("------------------------------------------------------------");

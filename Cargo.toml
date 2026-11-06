@@ -17,6 +17,7 @@ path = "src/api_server.rs"
 
 [dependencies]
 tch = "0.17.0"
+earshot = "1"
 tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
 rubato = "0.16"
 hound = "3.5"
