@@ -248,18 +248,24 @@ impl NemotronTorchModel {
                 if token == self.blank_id {
                     break;
                 }
+                let tok_u32 = token as u32;
                 if prev_token_in_frame == Some(token) {
                     break;
                 }
-                if emitted_tokens.len() >= 2
-                    && emitted_tokens[emitted_tokens.len() - 1] == token as u32
-                    && emitted_tokens[emitted_tokens.len() - 2] == token as u32
+                // Block consecutive duplicate BPE subwords (e.g. "coffeefefe", "byy", "Dd", "you you")
+                if emitted_tokens.last() == Some(&tok_u32) {
+                    break;
+                }
+                // Block 2-token alternating BPE loops ([A, B, A, B], e.g. "ecocococo", "athingsings", "languageageages")
+                if emitted_tokens.len() >= 3
+                    && emitted_tokens[emitted_tokens.len() - 2] == tok_u32
+                    && emitted_tokens[emitted_tokens.len() - 1] == emitted_tokens[emitted_tokens.len() - 3]
                 {
                     break;
                 }
 
                 prev_token_in_frame = Some(token);
-                emitted_tokens.push(token as u32);
+                emitted_tokens.push(tok_u32);
                 last_token = Tensor::from_slice(&[token])
                     .unsqueeze(0)
                     .to_kind(Kind::Int64)
@@ -291,13 +297,13 @@ impl NemotronTorchModel {
         let audio_16k = Self::resample_to_16k(raw_audio, orig_sr)?;
         let _guard = tch::no_grad_guard();
 
-        // Pass 2 uses chunk_size = 14 (13 lookahead frames = 1,120ms right-context across word boundaries)
-        let enc_out = self.encode_waveform(&audio_16k, language, 14)?;
+        // Pass 2 uses chunk_size = 4 (matching the exact num_lookahead=3 regime phosai/elgon-streaming-v1 was fine-tuned on)
+        // combined with 4-beam ALSD search and log-sum-exp path recombination
+        let enc_out = self.encode_waveform(&audio_16k, language, 4)?;
         let num_frames = enc_out.size()[1];
 
         const BEAM_WIDTH: usize = 4;
-        const LENGTH_BONUS: f64 = 0.16;
-        const PRUNE_MARGIN: f64 = 3.2;
+        const PRUNE_MARGIN: f64 = 2.8;
 
         struct BeamState {
             tokens: Vec<u32>,
@@ -369,11 +375,14 @@ impl NemotronTorchModel {
                         break;
                     }
 
-                    // Guard against >2 consecutive identical subword tokens
+                    // Guard against consecutive duplicate BPE subwords and 2-token alternating loops ([A, B, A, B])
                     let tok_u32 = tok as u32;
-                    if beam.tokens.len() >= 2
-                        && beam.tokens[beam.tokens.len() - 1] == tok_u32
+                    if beam.tokens.last() == Some(&tok_u32) {
+                        continue;
+                    }
+                    if beam.tokens.len() >= 3
                         && beam.tokens[beam.tokens.len() - 2] == tok_u32
+                        && beam.tokens[beam.tokens.len() - 1] == beam.tokens[beam.tokens.len() - 3]
                     {
                         continue;
                     }
@@ -391,7 +400,7 @@ impl NemotronTorchModel {
 
                     let mut new_tokens = beam.tokens.clone();
                     new_tokens.push(tok_u32);
-                    let score1 = beam.score + tok_logp + LENGTH_BONUS + blank2_logp;
+                    let score1 = beam.score + tok_logp + blank2_logp;
 
                     next_beams.push(BeamState {
                         tokens: new_tokens.clone(),
@@ -406,7 +415,14 @@ impl NemotronTorchModel {
                         let (top2_vals, top2_idxs) = log_probs2.topk(2, -1, true, true);
                         for k2 in 0..2 {
                             let tok2 = top2_idxs.int64_value(&[k2]);
+                            let tok2_u32 = tok2 as u32;
                             if tok2 == self.blank_id || tok2 == tok {
+                                continue;
+                            }
+                            if new_tokens.len() >= 3
+                                && new_tokens[new_tokens.len() - 2] == tok2_u32
+                                && new_tokens[new_tokens.len() - 1] == new_tokens[new_tokens.len() - 3]
+                            {
                                 continue;
                             }
                             let tok2_logp = top2_vals.double_value(&[k2]);
@@ -421,13 +437,13 @@ impl NemotronTorchModel {
                                 let blank3_logp = log_probs3.double_value(&[self.blank_id]);
 
                                 let mut tokens2 = new_tokens.clone();
-                                tokens2.push(tok2 as u32);
+                                tokens2.push(tok2_u32);
                                 next_beams.push(BeamState {
                                     tokens: tokens2,
                                     dec_out: dec_out3,
                                     h: h3,
                                     c: c3,
-                                    score: beam.score + tok_logp + tok2_logp + (2.0 * LENGTH_BONUS) + blank3_logp,
+                                    score: beam.score + tok_logp + tok2_logp + blank3_logp,
                                 });
                             }
                         }

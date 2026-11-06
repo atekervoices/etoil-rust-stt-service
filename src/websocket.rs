@@ -290,8 +290,12 @@ impl WebSocketHandler {
                         let sr_usize = sample_rate as usize;
                         audio_buffer.extend(&new_audio_samples);
 
-                        // Sensitive threshold (0.002) so quiet speech syllables (e.g. 0.0035 RMS) are always captured
-                        if rms >= 0.002 {
+                        // Hysteresis VAD:
+                        // - Require rms >= 0.0045 to trigger speech onset (!speech_detected -> true) so quiet post-sentence
+                        //   breaths/hiss (0.002-0.004) never cause false-start partials like "Pokudi?" or "P School."
+                        // - Once speech_detected == true, keep sensitive threshold (0.002) so soft trailing syllables are never clipped.
+                        let active_thresh = if speech_detected { 0.002 } else { 0.0045 };
+                        if rms >= active_thresh {
                             if !speech_detected {
                                 utterance_rms_ema = rms.max(0.01);
                             } else {
@@ -311,9 +315,9 @@ impl WebSocketHandler {
                             silent_samples += new_audio_samples.len();
                             dip_samples += new_audio_samples.len();
                         } else {
-                            // While waiting for speech onset, keep a rolling 0.64s pre-roll buffer
-                            // so idle room silence does not accumulate, without ever clipping word onsets
-                            let pre_roll_samples = (sr_usize * 64) / 100;
+                            // While waiting for speech onset, keep a short 0.16s (1-chunk) pre-roll buffer
+                            // so consonant onsets are preserved without accumulating old pause noise
+                            let pre_roll_samples = (sr_usize * 16) / 100;
                             if audio_buffer.len() > pre_roll_samples {
                                 let excess = audio_buffer.len() - pre_roll_samples;
                                 audio_buffer.drain(0..excess);
@@ -390,14 +394,9 @@ impl WebSocketHandler {
                                 silent_samples = 0;
                                 dip_samples = 0;
                             } else {
-                                // Pause split: keep the trailing 0.32s of the pause as pre-roll for the next sentence
-                                let tail_keep = (sr_usize * 32 / 100).min(dip_samples.max(silent_samples)).min(audio_buffer.len());
-                                if tail_keep > 0 {
-                                    let drain_len = audio_buffer.len() - tail_keep;
-                                    audio_buffer.drain(0..drain_len);
-                                } else {
-                                    audio_buffer.clear();
-                                }
+                                // Pause split: clear buffer cleanly so trailing breath/reverb from the previous sentence
+                                // never leaks into the start of the next utterance
+                                audio_buffer.clear();
                                 speech_detected = false;
                                 silent_samples = 0;
                                 dip_samples = 0;
@@ -405,8 +404,8 @@ impl WebSocketHandler {
                             last_emitted_text.clear();
                             last_inference_time = std::time::Instant::now();
                         }
-                        // Pass 1: Fast streaming partial transcription update every ~240ms while speech is ongoing
-                        else if speech_detected && audio_buffer.len() >= 2560 && last_inference_time.elapsed().as_millis() >= 240 {
+                        // Pass 1: Fast streaming partial transcription update every ~240ms once >= 0.48s of speech is buffered
+                        else if speech_detected && audio_buffer.len() >= (sr_usize * 48 / 100) && last_inference_time.elapsed().as_millis() >= 240 {
                             let model = self.service.model.clone();
                             let buf_clone = audio_buffer.clone();
                             let lang_target = active_language.to_nemotron_lang().to_string();
